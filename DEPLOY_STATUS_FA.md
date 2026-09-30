@@ -46,3 +46,24 @@ Fine-grained token فقط به repo `abi18636/lundry` دسترسی Contents دا
 
 ## Local
 کد: `/home/user/zenith_trader_bot`
+
+
+## به‌روزرسانی نظارت ساعتی (2026-09-30)
+
+### یافته‌ها
+- Deribit **testnet** برای همهٔ `*_USDC-PERPETUAL` (و inverse) در حالت `state=halted`
+- خطای قبلی `400 / 10031 invalid_args_for_instrument` ناشی از halt صرافی بود، نه باگ استراتژی
+- dust position BTC باقی‌مانده قابل بستن نیست تا بازار open شود
+
+### اصلاحات live (commit e4cb6ca+)
+- `market_state` gate → `status=market_halted` بدون ارسال سفارش
+- quantize amount به `contract_size` + `_fmt_amount`
+- تلگرام: حداکثر یک اعلان halt / ۶ ساعت
+- `scripts/hourly_watchdog.py` + حلقهٔ ساعتی در workspace
+- health: فیلدهای `build` و `n_assets`
+
+### وضعیت فعلی
+- LIVE: 25 جفت · 5 sleeve · act_err=0 · 25× market_halted
+- سفارش‌ها وقتی `state=open` شود با step تمیز ادامه می‌یابند
+- secrets (GitHub/Render/Deribit) باید rotate شوند
+
