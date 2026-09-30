@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: zenith-trader-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: DERIBIT_BASE_URL
+        value: https://test.deribit.com/api/v2
+      - key: TRADING_ENABLED
+        value: "true"
+      - key: DRY_RUN
+        value: "false"
+      - key: CAPITAL_USD
+        value: "100"
+      - key: LEV_CAP
+        value: "1.0"
+      - key: LONG_ONLY
+        value: "true"
+      - key: ASSETS
+        value: BTC,ETH,SOL
+      - key: SLEEVE_WEIGHTS
+        value: "zenith_apex:0.25,almasi_primary:0.25,inst_v3_stable:0.30,inst_v3_primary:0.10,zenith_endurance:0.10"
+      - key: SLEEVES_ENABLED
+        value: "zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance"
+      - key: LOOP_SECONDS
+        value: "60"
+      - key: MAX_NOTIONAL_USD
+        value: "500"
+      - key: MIN_NOTIONAL_USD
+        value: "10"
+      - key: CANDLE_LOOKBACK_HOURS
+        value: "5000"
+      - key: DERIBIT_CLIENT_ID
+        sync: false
+      - key: DERIBIT_CLIENT_SECRET
+        sync: false
