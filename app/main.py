@@ -71,15 +71,18 @@ app = FastAPI(
 def health():
     eng = get_engine()
     snap = eng.snapshot()
+    s = get_settings()
     return {
         "ok": True,
         "bot": "zenith-SUPER",
+        "build": os.getenv("GIT_SHA", "1a15e7e-haltgate"),
         "running": snap["running"],
         "mode": snap["mode"],
         "loop_count": snap["loop_count"],
         "last_loop_at": snap["last_loop_at"],
         "last_error": snap["last_error"],
         "n_sleeves": len(snap.get("sleeves") or []),
+        "n_assets": len(s.assets),
     }
 
 

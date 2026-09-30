@@ -62,9 +62,12 @@ class DeribitClient:
         data = r.json() if r.content else {}
         if "error" in data:
             err = data["error"]
-            raise RuntimeError(f"private/{method}: {err}")
+            detail = err if isinstance(err, str) else (
+                f"{err.get('code')} {err.get('message')} {err.get('data')}"
+            )
+            raise RuntimeError(f"private/{method} params={params}: {detail}")
         if r.status_code >= 400:
-            raise RuntimeError(f"private/{method} HTTP {r.status_code}: {r.text[:300]}")
+            raise RuntimeError(f"private/{method} HTTP {r.status_code} params={params}: {r.text[:400]}")
         return data.get("result")
 
     def _public(self, method: str, params: Optional[dict] = None) -> Any:

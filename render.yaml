@@ -22,20 +22,30 @@ services:
       - key: LONG_ONLY
         value: "true"
       - key: ASSETS
-        value: BTC,ETH,SOL
+        value: BTC,ETH,SOL,XRP,DOGE,BNB,ADA,AVAX,LINK,DOT,LTC,BCH,UNI,ATOM,NEAR,APT,ARB,OP,SUI,FIL,INJ,SEI,WLD,TRX,TAO
       - key: SLEEVE_WEIGHTS
         value: "zenith_apex:0.25,almasi_primary:0.25,inst_v3_stable:0.30,inst_v3_primary:0.10,zenith_endurance:0.10"
       - key: SLEEVES_ENABLED
         value: "zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance"
       - key: LOOP_SECONDS
-        value: "60"
+        value: "90"
       - key: MAX_NOTIONAL_USD
         value: "500"
       - key: MIN_NOTIONAL_USD
         value: "10"
       - key: CANDLE_LOOKBACK_HOURS
-        value: "5000"
+        value: "2500"
+      - key: TELEGRAM_TRADE_ONLY
+        value: "true"
+      - key: TELEGRAM_FULL_REPORT_HOURS
+        value: "6"
       - key: DERIBIT_CLIENT_ID
         sync: false
       - key: DERIBIT_CLIENT_SECRET
+        sync: false
+      - key: TELEGRAM_ENABLED
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
         sync: false
