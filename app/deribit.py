@@ -181,6 +181,32 @@ class DeribitClient:
     def cancel_order(self, order_id: str) -> dict:
         return self._private("cancel", {"order_id": order_id}) or {}
 
+    # ── Financial reporting read-only helpers ───────────────────────────
+    def trades_by_order(self, order_id: str) -> List[dict]:
+        result = self._private("get_user_trades_by_order", {"order_id": order_id}) or []
+        if isinstance(result, dict):
+            result = result.get("trades") or []
+        return result if isinstance(result, list) else []
+
+    def user_trades_window(self, start_ms: int, end_ms: int) -> tuple[List[dict], bool]:
+        result = self._private("get_user_trades_by_currency_and_time", {
+            "currency": "USDC", "kind": "future",
+            "start_timestamp": int(start_ms), "end_timestamp": int(end_ms),
+            "count": 1000, "sorting": "asc",
+        }) or {}
+        trades = result.get("trades") or []
+        has_more = bool(result.get("has_more"))
+        return trades if isinstance(trades, list) else [], has_more
+
+    def transaction_window(self, start_ms: int, end_ms: int) -> tuple[List[dict], bool]:
+        result = self._private("get_transaction_log", {
+            "currency": "USDC", "start_timestamp": int(start_ms), "end_timestamp": int(end_ms),
+            "count": 1000, "query": "trade settlement",
+        }) or {}
+        logs = result.get("logs") or []
+        cont = result.get("continuation")
+        return logs if isinstance(logs, list) else [], cont is None
+
     @staticmethod
     def _fmt_amount(amount: float) -> str:
         return f"{float(amount):.10f}".rstrip("0").rstrip(".") or "0"

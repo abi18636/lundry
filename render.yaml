@@ -55,6 +55,10 @@ services:
         value: "false"
       - key: DASHBOARD_TOKEN
         sync: false
+      - key: REPORT_TIMEZONE
+        value: "Europe/Istanbul"
+      - key: REPORT_HISTORY_HOURS
+        value: "168"
       - key: TEST_TRADE_ENABLED
         value: "true"
       - key: TEST_TRADE_ASSET

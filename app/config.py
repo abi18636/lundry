@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     test_trade_max_notional_usd: float = Field(default=10.0, gt=0, le=10.0)
     telegram_bot_username: str = "TestTraid_bot"
 
+    # Financial reporting — separate read-only accounting
+    report_timezone: str = "Europe/Istanbul"
+    report_history_hours: int = Field(default=168, ge=24, le=720)
+    report_fee_currency: str = "USDC"
+
     # Telegram ops (token/chat via env only)
     telegram_enabled: bool = True
     telegram_bot_token: str = ""

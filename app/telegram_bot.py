@@ -1,4 +1,3 @@
-
 """
 Telegram control panel for Zenith SUPER bot.
 
@@ -6,6 +5,7 @@ Telegram control panel for Zenith SUPER bot.
 - Trade alerts ONLY when real order success/fail (not every flat cycle)
 - Full text-file report every N hours or via panel button
 - Commands still work
+- Financial reporting: per-trade with exact capital and P&L, and 6h comprehensive file
 """
 from __future__ import annotations
 
@@ -29,6 +29,8 @@ TRADE_STATUSES = {
     "error", "failed",
 }
 
+TEST_STATUSES = {"test_opened", "test_closed_fill"}
+
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -51,6 +53,15 @@ def _f(x, d=2) -> str:
         return f"{float(x):.{d}f}"
     except Exception:
         return "—"
+
+
+def _fmt_money(v):
+    if v is None:
+        return "نامشخص"
+    try:
+        return f"{float(v):+.6f}"
+    except Exception:
+        return "نامشخص"
 
 
 class TelegramReporter:
@@ -89,6 +100,7 @@ class TelegramReporter:
         self._last_problem = ""
         self._previous_open_count = None
         self._test_alerted_ids = set()
+        self._financial_alerted = set()
         self._panel_msg_id: Optional[int] = None
         self.stats = {
             "sent": 0,
@@ -101,7 +113,6 @@ class TelegramReporter:
             "trades_alerted": 0,
             "files_sent": 0,
         }
-        # cumulative trade journal (in-memory + engine snapshot)
         self.journal: List[dict] = []
 
     # ── API ───────────────────────────────────────────────────────────────
@@ -145,17 +156,14 @@ class TelegramReporter:
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )
-            # only last chunk gets keyboard
             if reply_markup and i == len(chunks) - 1:
-                import json as _json
-                params["reply_markup"] = _json.dumps(reply_markup)
+                params["reply_markup"] = json.dumps(reply_markup)
             data = self._api("sendMessage", **params)
             if not data.get("ok"):
                 plain = _plain(ch)
                 params = dict(chat_id=self.chat_id, text=plain[:4000], disable_web_page_preview=True)
                 if reply_markup and i == len(chunks) - 1:
-                    import json as _json
-                    params["reply_markup"] = _json.dumps(reply_markup)
+                    params["reply_markup"] = json.dumps(reply_markup)
                 data = self._api("sendMessage", **params)
             last = data
             time.sleep(0.05)
@@ -178,7 +186,6 @@ class TelegramReporter:
                 return True
             log.warning("sendDocument fail: %s", j)
             self.stats["failed"] += 1
-            # fallback: chunk as messages
             self.send(f"<b>{_esc(filename)}</b>\n<pre>{_esc(content[:3500])}</pre>")
             return False
         except Exception as e:
@@ -197,7 +204,6 @@ class TelegramReporter:
 
     # ── Glass keyboard ────────────────────────────────────────────────────
     def main_keyboard(self) -> dict:
-        """Inline glass-style control panel."""
         return {
             "inline_keyboard": [
                 [
@@ -225,19 +231,12 @@ class TelegramReporter:
                     {"text": "⏹ Stop", "callback_data": "panel:stop"},
                     {"text": "🔄 پنل", "callback_data": "panel:home"},
                 ],
-                (
-                    [[{"text": "🌐 داشبورد وب", "url": self.dashboard_url}]]
-                    if self.dashboard_url
-                    else []
-                )[0]
-                if self.dashboard_url
-                else [],
+                ([{"text": "🌐 داشبورد وب", "url": self.dashboard_url}] if self.dashboard_url else [])[0] if self.dashboard_url else [],
             ]
         }
 
     def _kb(self) -> dict:
         kb = self.main_keyboard()
-        # clean empty rows
         kb["inline_keyboard"] = [row for row in kb["inline_keyboard"] if row]
         return kb
 
@@ -287,28 +286,34 @@ class TelegramReporter:
         assets = cfg.get("assets") or []
         pos = snap.get("positions") or []
         st = self.stats
+        fin = snap.get("financial") or {}
         lines = [
             f"📊 <b>وضعیت SUPER</b>",
             f"🕐 {utcnow()}",
             f"",
-            f"{'🟢 RUNNING' if snap.get('running') else '🔴 STOPPED'} · "
-            f"<b>{_esc(snap.get('mode'))}</b>",
+            f"{'🟢 RUNNING' if snap.get('running') else '🔴 STOPPED'} · <b>{_esc(snap.get('mode'))}</b>",
             f"loops: <code>{_esc(snap.get('loop_count'))}</code>",
             f"last: <code>{_esc(snap.get('last_loop_at'))}</code>",
             f"error: <code>{_esc(snap.get('last_error') or 'none')}</code>",
             f"",
             f"<b>سرمایه/ریسک</b>",
-            f"capital ${_esc(cfg.get('capital_usd'))} · lev≤{_esc(cfg.get('lev_cap'))}",
-            f"dry_run={_esc(cfg.get('dry_run'))} · trading={_esc(cfg.get('trading_enabled'))}",
-            f"pairs: <b>{len(assets)}</b>",
-            f"",
-            f"<b>موجودی USDC</b> eq=<code>{_esc(usdc.get('equity'))}</code> "
-            f"avail=<code>{_esc(usdc.get('available'))}</code>",
+            f"تخصیصی ربات: ${_esc(cfg.get('capital_usd'))} · lev≤{_esc(cfg.get('lev_cap'))}",
+            f"برآورد موجودی ربات: ${_f(snap.get('risk', {}).get('estimated_bot_equity'))}",
+            f"حساب USDC eq=<code>{_esc(usdc.get('equity'))}</code> avail=<code>{_esc(usdc.get('available'))}</code>",
             f"پوزیشن باز: <b>{len(pos)}</b>",
             f"",
             f"<b>آمار سفارش</b> ✅{st['orders_ok']} ⏭{st['orders_skip']} ❌{st['orders_err']}",
             f"alerts: {st['trades_alerted']} · files: {st['files_sent']}",
         ]
+        if fin:
+            lines.extend([
+                f"",
+                f"<b>گزارش مالی (۶ساعت اخیر)</b>",
+                f"معاملات: {fin.get('execution_count', 0)} · بسته‌شده: {fin.get('closed_event_count', 0)}",
+                f"سود/زیان بسته‌شده تأییدشده: {_f(fin.get('verified_closed_net_usdc'))} USDC",
+                f"کارمزد دوره: {_f(fin.get('period_fees_usdc'))} USDC",
+                f"غیرمحقق: {_f(fin.get('unrealized_gross_usdc'))} USDC",
+            ])
         dg = snap.get("diagnostics") or {}
         lines.extend([
             "", "<b>آمادگی واقعی معامله</b>",
@@ -385,8 +390,79 @@ class TelegramReporter:
                 self.journal = self.journal[-500:]
         self.send(f"<b>{_esc(heads.get(event, event))}</b>\n{self.format_test_trade(state)}", reply_markup=self._kb())
 
+    # ── Financial per-trade formatting ────────────────────────────────────
+    def format_financial_event(self, ev: dict) -> str:
+        kind = ev.get("kind")
+        asset = ev.get("asset")
+        side = ev.get("direction")
+        qty = ev.get("filled_amount")
+        price = ev.get("price")
+        fee = ev.get("paid_fee_usdc")
+        gross = ev.get("realized_gross_usdc")
+        pnl = ev.get("net_final_usdc")
+        pnl_fee = ev.get("net_price_fees_usdc")
+        entry_price = ev.get("entry_price")
+        closed_q = ev.get("closed_quantity")
+        capital = ev.get("position_notional_at_fill_usdc")
+        source = ev.get("source")
+        icon = "🟢" if kind in ("open", "increase") else "🔴" if kind in ("close", "reduce") else "🟡"
+        lines = [
+            f"{icon} <b>{_esc(asset)} { _esc(kind).upper()}</b> · { _esc(source)}",
+            f"🕐 {utcnow()}",
+            f"مقدار: <code>{_f(qty,6)}</code> @ <code>{_f(price,4)}</code>",
+            f"سرمایه درگیر پس از fill: ${_f(capital)}",
+        ]
+        if kind in ("close", "reduce", "reverse", "close_unknown_basis"):
+            lines.append(f"بسته‌شده: {_f(closed_q,6)} از میانگین ورود {_f(entry_price,4)}")
+            lines.append(f"سود ناخالص قیمت: {_f(gross)} USDC" if gross is not None else "سود ناخالص قیمت: نامشخص (شواهد ورود ناقص)")
+            lines.append(f"کارمزد تخصیصی ورود: {_f(ev.get('entry_fee_allocated_usdc'))} · خروج: {_f(ev.get('exit_fee_usdc'))}")
+            lines.append(f"سود خالص با کارمزد: {_f(pnl_fee)} USDC" if pnl_fee is not None else "سود خالص با کارمزد: نامشخص")
+            lines.append(f"سود نهایی (با فاندینگ ثبت‌شده): {_f(pnl)} USDC" if pnl is not None else "سود نهایی: نامشخص (فاندینگ یا کارمزد ناقص)")
+            if ev.get("return_pct_price_fees") is not None:
+                lines.append(f"بازده: {_f(ev.get('return_pct_price_fees'))}%")
+        else:
+            lines.append(f"کارمزد پرداخت‌شده: {_f(fee)} USDC" if fee is not None else "کارمزد: نامشخص")
+            if pnl is not None:
+                lines.append(f"هزینه اولیه: { _f(pnl)} USDC")
+        lines.append(f"order_id=<code>{_esc(ev.get('order_id'))}</code> · trades={len(ev.get('trade_ids') or [])}")
+        if ev.get("pnl_quality") and ev["pnl_quality"] != "complete":
+            lines.append(f"کیفیت محاسبه: <code>{_esc(ev['pnl_quality'])}</code>")
+        return "\n".join(lines)
+
+    def on_financial_event(self, event: dict, snapshot: dict) -> bool:
+        if not self.enabled:
+            return False
+        # Avoid duplicate alerts for same order+quantity level
+        key = f"{event.get('order_id')}:{event.get('filled_amount')}"
+        if key in self._financial_alerted:
+            return True
+        self._financial_alerted.add(key)
+        # Update local journal with real P&L
+        self.journal.append({
+            "ts": utcnow(),
+            "asset": event.get("asset"),
+            "status": event.get("kind"),
+            "amount": event.get("filled_amount"),
+            "price": event.get("price"),
+            "notional_usd": event.get("execution_notional_usdc"),
+            "order_id": event.get("order_id"),
+            "pnl": event.get("net_final_usdc") if event.get("net_final_usdc") is not None else event.get("net_price_fees_usdc"),
+            "fee": event.get("paid_fee_usdc"),
+            "capital": event.get("position_notional_at_fill_usdc"),
+            "source": event.get("source"),
+        })
+        self.journal = self.journal[-500:]
+        self.stats["orders_ok"] += 1
+        self.stats["trades_alerted"] += 1
+        text = self.format_financial_event(event)
+        # Add snapshot summary line
+        text += f"\n\n💰 سرمایه تخصیصی: ${ _f(snapshot.get('allocated_capital_usdc'))} · برآورد ربات: ${ _f(snapshot.get('estimated_bot_equity_usdc'))} · موجودی حساب: ${ _f((snapshot.get('account') or {}).get('equity'))}"
+        self.send(text, reply_markup=self._kb())
+        return True
+
     def format_balance(self, snap: dict) -> str:
         acct = snap.get("account") or {}
+        fin = snap.get("financial") or {}
         lines = [f"💰 <b>موجودی</b>", f"🕐 {utcnow()}", ""]
         for cur, v in acct.items():
             if not isinstance(v, dict) or "error" in v:
@@ -397,10 +473,20 @@ class TelegramReporter:
                 f"bal=<code>{_esc(v.get('balance'))}</code> "
                 f"avail=<code>{_esc(v.get('available'))}</code>"
             )
+        if fin:
+            lines.extend([
+                "",
+                f"<b>گزارش مالی</b>",
+                f"سرمایه تخصیصی: ${ _f(fin.get('allocated_capital_usdc'))}",
+                f"برآورد ربات: ${ _f(fin.get('estimated_bot_equity_usdc'))}",
+                f"حساب USDC eq: ${ _f((fin.get('account') or {}).get('equity'))}",
+                f"بازده بسته‌شده ۶ساعت: ${ _f(fin.get('verified_closed_net_usdc'))}",
+            ])
         return "\n".join(lines)
 
     def format_positions(self, snap: dict) -> str:
         pos = snap.get("positions") or []
+        fin = snap.get("financial") or {}
         lines = [f"💼 <b>پوزیشن‌ها ({len(pos)})</b>", f"🕐 {utcnow()}", ""]
         if not pos:
             lines.append("flat — بدون پوزیشن")
@@ -414,11 +500,12 @@ class TelegramReporter:
             lines.append(
                 f"• <b>{_esc(p.get('instrument_name'))}</b>\n"
                 f"  dir={_esc(p.get('direction'))} size={_esc(p.get('size_currency') or p.get('size'))}\n"
-                f"  mark={_esc(p.get('mark_price'))} lev={_esc(p.get('leverage'))}\n"
-                f"  pnl={_esc(p.get('total_profit_loss'))} "
-                f"uPnL={_esc(p.get('floating_profit_loss'))}"
+                f"  avg={_esc(p.get('average_price'))} mark={_esc(p.get('mark_price'))} lev={_esc(p.get('leverage'))}\n"
+                f"  pnl={_esc(p.get('total_profit_loss'))} uPnL={_esc(p.get('floating_profit_loss'))} funding={_esc(p.get('realized_funding'))}"
             )
         lines.append(f"\nΣ pnl ≈ <b>{total_pnl:.4f}</b>")
+        if fin.get("unrealized_gross_usdc") is not None:
+            lines.append(f"غیرمحقق حساب‌شده: ${ _f(fin.get('unrealized_gross_usdc'))}")
         return "\n".join(lines)
 
     def format_sleeves(self, snap: dict) -> str:
@@ -432,7 +519,6 @@ class TelegramReporter:
                 f"${float(sl.get('capital') or 0):.0f}\n"
                 f"  long={n_long}/{len(pa)} · ntl=${ntl:.1f}"
             )
-        # top net
         nb = snap.get("net_book") or {}
         top = sorted(nb.items(), key=lambda kv: float((kv[1] or {}).get("notional_usd") or 0), reverse=True)[:12]
         if top:
@@ -449,7 +535,9 @@ class TelegramReporter:
         j = self.journal
         wins = sum(1 for x in j if float(x.get("pnl") or 0) > 0)
         losses = sum(1 for x in j if float(x.get("pnl") or 0) < 0)
-        pnl = sum(float(x.get("pnl") or 0) for x in j)
+        pnl = sum(float(x.get("pnl") or 0) for x in j if x.get("pnl") is not None)
+        unknown = sum(1 for x in j if x.get("pnl") is None)
+        fin = snap.get("financial") or {}
         lines = [
             f"📈 <b>آمار</b>",
             f"🕐 {utcnow()}",
@@ -461,11 +549,18 @@ class TelegramReporter:
             f"files: {st['files_sent']}",
             f"",
             f"<b>ژورنال معاملات</b> n={len(j)}",
-            f"wins={wins} losses={losses}",
-            f"Σ pnl (logged)={pnl:.4f}",
+            f"wins={wins} losses={losses} unknown_pnl={unknown}",
+            f"Σ pnl (verified)={pnl:.6f} USDC",
             f"bot loops={_esc(snap.get('loop_count'))}",
             f"open positions={len(snap.get('positions') or [])}",
         ]
+        if fin:
+            lines.extend([
+                f"",
+                f"<b>گزارش مالی ۶ساعت</b> executions={fin.get('execution_count',0)} closes={fin.get('closed_event_count',0)}",
+                f"verified_closed_net=${ _f(fin.get('verified_closed_net_usdc'))}",
+                f"fees=${ _f(fin.get('period_fees_usdc'))} unreal=${ _f(fin.get('unrealized_gross_usdc'))}",
+            ])
         return "\n".join(lines)
 
     def format_trades_brief(self) -> str:
@@ -475,14 +570,17 @@ class TelegramReporter:
             lines.append("هنوز معاملهٔ ثبت‌شده‌ای نیست")
             return "\n".join(lines)
         for x in reversed(j):
+            pnl = x.get("pnl")
+            pnl_s = f" pnl={_f(pnl,6)}" if pnl is not None else " pnl=نامشخص"
             lines.append(
                 f"• {_esc(x.get('ts'))} {_esc(x.get('asset'))} "
                 f"<code>{_esc(x.get('status'))}</code> "
-                f"${_f(x.get('notional_usd'))} {_esc(x.get('error') or '')}"
+                f"${_f(x.get('notional_usd'))}{pnl_s}"
             )
         return "\n".join(lines)
 
     def format_trade_alert(self, actions: List[dict], *, loop_count: int = 0) -> str:
+        # Fallback for actions that have not yet been enriched by financial journal
         trades = [a for a in actions if (a.get("status") or "").lower() in TRADE_STATUSES]
         if not trades:
             return ""
@@ -504,7 +602,6 @@ class TelegramReporter:
                 lines.append(f"  order_id=<code>{_esc(a.get('order_id'))}</code> filled={_esc(a.get('filled_amount'))}")
             if a.get("error"):
                 lines.append(f"  {_esc(a.get('error'))[:240]}")
-            # journal
             self.journal.append({
                 "ts": utcnow(),
                 "asset": a.get("asset"),
@@ -532,39 +629,35 @@ class TelegramReporter:
         actions = snap.get("actions") or []
         events = snap.get("events") or []
         orders = snap.get("orders_log") or []
+        fin = snap.get("financial") or {}
         lines = []
-        lines.append("=" * 72)
-        lines.append("ZENITH SUPER BOT — FULL REPORT")
-        lines.append(f"generated: {utcnow()}")
-        lines.append("=" * 72)
+        lines.append("=" * 80)
+        lines.append("ZENITH SUPER BOT — COMPREHENSIVE 6H REPORT")
+        lines.append(f"generated: {utcnow()}  tz={fin.get('timezone') or cfg.get('report_timezone') or 'Europe/Istanbul'}")
+        lines.append("=" * 80)
         lines.append("")
-        lines.append("[STATUS]")
-        lines.append(f"running={snap.get('running')} mode={snap.get('mode')}")
-        lines.append(f"loop_count={snap.get('loop_count')} last_loop={snap.get('last_loop_at')}")
-        lines.append(f"last_error={snap.get('last_error')}")
-        lines.append(f"architecture={cfg.get('architecture')}")
-        lines.append(f"capital_usd={cfg.get('capital_usd')} lev_cap={cfg.get('lev_cap')} long_only={cfg.get('long_only')}")
-        lines.append(f"dry_run={cfg.get('dry_run')} trading_enabled={cfg.get('trading_enabled')}")
-        assets = cfg.get("assets") or []
-        lines.append(f"n_assets={len(assets)}")
-        lines.append(f"assets={','.join(assets)}")
-        lines.append(f"sleeves_enabled={cfg.get('sleeves_enabled')}")
-        lines.append(f"sleeve_weights={cfg.get('sleeve_weights')}")
+        lines.append("[CAPITAL & EQUITY — EXACT]")
+        lines.append(f"allocated_bot_capital_usdc={cfg.get('capital_usd')}")
+        lines.append(f"estimated_bot_equity_usdc={snap.get('risk', {}).get('estimated_bot_equity')}")
+        lines.append(f"peak_bot_equity_usdc={snap.get('risk', {}).get('peak_bot_equity')}")
+        lines.append(f"drawdown_pct={snap.get('risk', {}).get('drawdown_pct')}")
+        lines.append(f"notional_cap_usdc={snap.get('risk', {}).get('notional_cap_usdc')}")
+        lines.append(f"account_USDC_equity={(acct.get('USDC') or {}).get('equity')}")
+        lines.append(f"account_USDC_balance={(acct.get('USDC') or {}).get('balance')}")
+        lines.append(f"account_USDC_available={(acct.get('USDC') or {}).get('available')}")
+        lines.append(f"open_notional_usdc={fin.get('open_notional_usdc')}")
+        lines.append(f"initial_margin_usdc={fin.get('initial_margin_usdc')}")
+        lines.append(f"unrealized_gross_usdc={fin.get('unrealized_gross_usdc')}")
+        lines.append(f"scope_note={fin.get('scope_note') or 'Account equity != bot $100 allocation; funding only when evidence complete'}")
         lines.append("")
-        lines.append("[MANUAL_60_SECOND_TEST]")
-        lines.append(json.dumps(snap.get("test_trade") or {}, ensure_ascii=False, indent=2))
-        lines.append("[TRADING_READINESS]")
-        lines.append(json.dumps(snap.get("diagnostics") or {}, ensure_ascii=False, indent=2))
-        lines.append("[RISK]")
-        lines.append(json.dumps(snap.get("risk") or {}, ensure_ascii=False, indent=2))
-        lines.append("[LATEST_HOURLY_REVIEW]")
-        lines.append(json.dumps((snap.get("ops_reviews") or [])[-1:], ensure_ascii=False, indent=2))
+        lines.append("[FINANCIAL SUMMARY 6H]")
+        lines.append(f"window={fin.get('window')}")
+        lines.append(f"execution_count={fin.get('execution_count')} closed={fin.get('closed_event_count')} wins={fin.get('wins')} losses={fin.get('losses')}")
+        lines.append(f"verified_closed_net_usdc={fin.get('verified_closed_net_usdc')}")
+        lines.append(f"period_fees_usdc={fin.get('period_fees_usdc')}")
+        lines.append(f"status={fin.get('status')}")
         lines.append("")
-        lines.append("[ACCOUNT]")
-        for cur, v in acct.items():
-            lines.append(f"  {cur}: {v}")
-        lines.append("")
-        lines.append(f"[POSITIONS] n={len(pos)}")
+        lines.append("[POSITIONS] n={}".format(len(pos)))
         total_pnl = 0.0
         for p in pos:
             try:
@@ -573,63 +666,66 @@ class TelegramReporter:
                 pass
             lines.append(
                 f"  {p.get('instrument_name')} dir={p.get('direction')} "
-                f"size={p.get('size_currency') or p.get('size')} "
+                f"size={p.get('size_currency') or p.get('size')} avg={p.get('average_price')} "
                 f"mark={p.get('mark_price')} pnl={p.get('total_profit_loss')} "
-                f"upnl={p.get('floating_profit_loss')} lev={p.get('leverage')}"
+                f"upnl={p.get('floating_profit_loss')} funding={p.get('realized_funding')} lev={p.get('leverage')}"
             )
         lines.append(f"  TOTAL_pnl≈{total_pnl}")
         lines.append("")
+        lines.append("[TRADE EVENTS — EXACT CAPITAL & P&L]")
+        for ev in (fin.get("events") or [])[-100:]:
+            lines.append(
+                f"  {ev.get('timestamp')} {ev.get('asset')} {ev.get('kind')} "
+                f"qty={ev.get('filled_amount')} px={ev.get('price')} "
+                f"capital_after=${ev.get('position_notional_at_fill_usdc')} "
+                f"closed_qty={ev.get('closed_quantity')} gross={ev.get('realized_gross_usdc')} "
+                f"fee_alloc={ev.get('entry_fee_allocated_usdc')} exit_fee={ev.get('exit_fee_usdc')} "
+                f"net_fee={ev.get('net_price_fees_usdc')} net_final={ev.get('net_final_usdc')} "
+                f"quality={ev.get('pnl_quality')} order={ev.get('order_id')} src={ev.get('source')}"
+            )
+        lines.append("")
+        lines.append("[ALL EVENTS LIFETIME — VERIFIED]")
+        for ev in (fin.get("all_events") or [])[-50:]:
+            lines.append(f"  {ev}")
+        lines.append("")
+        lines.append("[MANUAL_60_SECOND_TEST]")
+        lines.append(json.dumps(snap.get("test_trade") or {}, ensure_ascii=False, indent=2))
+        lines.append("")
+        lines.append("[TRADING_READINESS]")
+        lines.append(json.dumps(snap.get("diagnostics") or {}, ensure_ascii=False, indent=2))
+        lines.append("")
+        lines.append("[RISK]")
+        lines.append(json.dumps(snap.get("risk") or {}, ensure_ascii=False, indent=2))
+        lines.append("")
+        lines.append("[STATUS]")
+        lines.append(f"running={snap.get('running')} mode={snap.get('mode')} loop={snap.get('loop_count')} last_loop={snap.get('last_loop_at')} last_error={snap.get('last_error')}")
+        lines.append(f"architecture={cfg.get('architecture')} capital={cfg.get('capital_usd')} lev={cfg.get('lev_cap')}")
+        lines.append(f"assets={','.join(cfg.get('assets') or [])}")
+        lines.append(f"sleeves={cfg.get('sleeves_enabled')} weights={cfg.get('sleeve_weights')}")
+        lines.append("")
+        lines.append("[ACCOUNT RAW]")
+        for cur, v in acct.items():
+            lines.append(f"  {cur}: {v}")
+        lines.append("")
         lines.append(f"[SLEEVES] n={len(sleeves)}")
         for sl in sleeves:
-            lines.append(
-                f"  - {sl.get('id')} w={sl.get('weight')} cap={sl.get('capital')} "
-                f"title={sl.get('title')} notes={sl.get('notes')}"
-            )
-            pa = sl.get("per_asset") or {}
-            longs = [a for a, p in pa.items() if float((p or {}).get("side") or 0) > 0]
-            lines.append(f"    long_assets={longs} n_long={len(longs)}/{len(pa)}")
-            # compact per-asset sides
-            for a, p in sorted(pa.items()):
-                if float((p or {}).get("side") or 0) == 0 and float((p or {}).get("notional_usd") or 0) == 0:
-                    continue
-                lines.append(
-                    f"    {a}: side={p.get('side')} ntl={p.get('notional_usd')} "
-                    f"coin={p.get('target_coin')} detail={p.get('detail')}"
-                )
-        lines.append("")
-        lines.append("[NET_BOOK]")
-        for a, b in sorted(nb.items(), key=lambda kv: -float((kv[1] or {}).get("notional_usd") or 0)):
-            n = float((b or {}).get("notional_usd") or 0)
-            if n <= 0:
-                continue
-            lines.append(
-                f"  {a}: coin={b.get('target_coin')} ntl={n} px={b.get('price')} "
-                f"contributors={list((b.get('contributors') or {}).keys())}"
-            )
-        lines.append("")
-        lines.append(f"[RECENT_ACTIONS] n={len(actions)}")
-        for a in actions[-40:]:
-            lines.append(
-                f"  {a.get('asset')} status={a.get('status')} amt={a.get('amount')} "
-                f"ntl={a.get('notional_usd')} err={a.get('error')}"
-            )
+            lines.append(f"  - {sl.get('id')} w={sl.get('weight')} cap={sl.get('capital')} title={sl.get('title')}")
         lines.append("")
         lines.append(f"[ORDERS_LOG] n={len(orders)}")
-        for o in orders[-50:]:
+        for o in orders[-100:]:
             lines.append(f"  {o}")
         lines.append("")
-        lines.append(f"[EVENTS] n={len(events)}")
-        for e in events[-40:]:
+        lines.append(f"[ENGINE EVENTS] n={len(events)}")
+        for e in events[-50:]:
             lines.append(f"  {e.get('ts')} [{e.get('kind')}] {e.get('msg')}")
         lines.append("")
-        lines.append(f"[TRADE_JOURNAL] n={len(self.journal)}")
-        wins = losses = 0
-        for x in self.journal:
+        lines.append(f"[TELEGRAM JOURNAL] n={len(self.journal)}")
+        for x in self.journal[-100:]:
             lines.append(f"  {x}")
         lines.append("")
         lines.append(f"[TG_STATS] {self.stats}")
         lines.append("")
-        lines.append("END OF REPORT")
+        lines.append("END OF COMPREHENSIVE REPORT — All PnL uses actual fills; unknown stays 'نامشخص', never fabricated zero.")
         return "\n".join(lines)
 
     # ── hooks ─────────────────────────────────────────────────────────────
@@ -638,12 +734,15 @@ class TelegramReporter:
             return
         cfg = snap.get("config") or {}
         assets = cfg.get("assets") or []
+        fin = snap.get("financial") or {}
         msg = (
             f"🚀 <b>SUPER BOT ONLINE</b>\n"
             f"🕐 {utcnow()}\n"
             f"pairs: <b>{len(assets)}</b> · sleeves: <b>{len(cfg.get('sleeves_enabled') or [])}</b>\n"
-            f"capital ${_esc(cfg.get('capital_usd'))} · dry={_esc(cfg.get('dry_run'))}\n"
-            f"trade_alerts=only · full_file_report every {self.full_report_hours:g}h\n"
+            f"سرمایه تخصیصی: ${ _f(cfg.get('capital_usd'))} · برآورد ربات: ${ _f((snap.get('risk') or {}).get('estimated_bot_equity'))}\n"
+            f"حساب USDC eq: ${ _f((snap.get('account', {}).get('USDC') or {}).get('equity'))}\n"
+            f"گزارش مالی ۶ساعت: ${ _f(fin.get('verified_closed_net_usdc'))} (بسته‌شده تأییدشده)\n"
+            f"trade_alerts=per-fill with capital & P&L · file every {self.full_report_hours:g}h\n"
             f"Web: {_esc(self.dashboard_url)}"
         )
         self.send(msg)
@@ -655,9 +754,8 @@ class TelegramReporter:
         now = time.time()
         if error:
             self.stats["cycles_err"] += 1
-            if error != self._last_problem or now-self._last_problem_notice >= 600:
-                self.send(f"🚨 <b>CYCLE ERROR</b>\n🕐 {utcnow()} · loop {_esc(loop_count)}\n"
-                          f"<code>{_esc(error)[:1500]}</code>", reply_markup=self._kb())
+            if error != self._last_problem or now - self._last_problem_notice >= 600:
+                self.send(f"🚨 <b>CYCLE ERROR</b>\n🕐 {utcnow()} · loop {_esc(loop_count)}\n<code>{_esc(error)[:1500]}</code>", reply_markup=self._kb())
                 self._last_problem, self._last_problem_notice = error, now
             return
         self.stats["cycles_ok"] += 1
@@ -665,40 +763,40 @@ class TelegramReporter:
         for action in actions:
             if (action.get("status") or "").lower() not in TRADE_STATUSES:
                 self.stats["orders_skip"] += 1
-        # No dry-run or merely acknowledged order is described as a real trade.
         fills = [a for a in actions if float(a.get("filled_amount") or 0) > 0]
         fills += result.get("recovered_fills") or []
         failures = [a for a in actions if a.get("status") in ("error", "failed")]
         signature = " | ".join(str(a.get("error")) for a in failures)
-        if failures and signature == self._last_problem and now-self._last_problem_notice < 600:
+        if failures and signature == self._last_problem and now - self._last_problem_notice < 600:
             failures = []
         if failures:
             self._last_problem, self._last_problem_notice = signature, now
-        alerts = fills+failures
-        if alerts:
-            text = self.format_trade_alert(alerts, loop_count=loop_count)
-            if text:
-                self.send(text, reply_markup=self._kb())
+        # Financial per-fill alerts are sent via on_financial_event queue; avoid duplicate here
+        # Only send fallback alerts if financial reporting not active
+        if not self._engine or not hasattr(self._engine, "financial"):
+            alerts = fills + failures
+            if alerts:
+                text = self.format_trade_alert(alerts, loop_count=loop_count)
+                if text:
+                    self.send(text, reply_markup=self._kb())
+        else:
+            if failures:
+                text = self.format_trade_alert(failures, loop_count=loop_count)
+                if text:
+                    self.send(text, reply_markup=self._kb())
         dg = result.get("diagnostics") or {}
         opened = dg.get("market_open_count", 0)
         if self._previous_open_count == 0 and opened > 0:
-            self.send(f"▶️ <b>بازگشایی بازار تست‌نت تأیید شد</b>\nبازار باز: {opened}\n"
-                      f"مسیر معامله: {_esc(dg.get('trading_state'))}\n"
-                      f"ورود فقط پس از کنترل داده تازه، حداقل لات و ریسک مجاز است.", reply_markup=self._kb())
+            self.send(f"▶️ <b>بازگشایی بازار تست‌نت تأیید شد</b>\nبازار باز: {opened}\nمسیر معامله: {_esc(dg.get('trading_state'))}\nورود فقط پس از کنترل داده تازه، حداقل لات و ریسک مجاز است.", reply_markup=self._kb())
         self._previous_open_count = opened
         halted = [a for a in actions if a.get("market_state") == "halted"]
-        if halted and now-self._last_halt_notice >= 6*3600:
-            self.send(f"⏸️ <b>معامله واقعی مسدود است؛ وب‌سرویس روشن است</b>\n"
-                      f"Deribit testnet: halted={len(halted)}/{len(actions)}\n"
-                      f"نماد دارای سیگنال: {dg.get('active_signal_assets', 0)}\n"
-                      f"توقف صرافی قابل رفع از داخل ربات نیست. بررسی خودکار هر چرخه ادامه دارد؛ هیچ معاملهٔ شبیه‌سازی واقعی گزارش نمی‌شود.",
-                      reply_markup=self._kb())
+        if halted and now - self._last_halt_notice >= 6 * 3600:
+            self.send(f"⏸️ <b>معامله واقعی مسدود است؛ وب‌سرویس روشن است</b>\nDeribit testnet: halted={len(halted)}/{len(actions)}\nنماد دارای سیگنال: {dg.get('active_signal_assets', 0)}\nتوقف صرافی قابل رفع از داخل ربات نیست. بررسی خودکار هر چرخه ادامه دارد؛ هیچ معاملهٔ شبیه‌سازی واقعی گزارش نمی‌شود.", reply_markup=self._kb())
             self._last_halt_notice = now
         problem = dg.get("primary_blocker")
         if problem and problem not in ("venue_halted", "no_open_markets") and not failures:
-            if problem != self._last_problem or now-self._last_problem_notice >= 6*3600:
-                self.send(f"🛠️ <b>مانع مسیر معامله</b>\n<code>{_esc(problem)}</code>\n"
-                          f"state={_esc(dg.get('trading_state'))} · loop={loop_count}", reply_markup=self._kb())
+            if problem != self._last_problem or now - self._last_problem_notice >= 6 * 3600:
+                self.send(f"🛠️ <b>مانع مسیر معامله</b>\n<code>{_esc(problem)}</code>\nstate={_esc(dg.get('trading_state'))} · loop={loop_count}", reply_markup=self._kb())
                 self._last_problem, self._last_problem_notice = problem, now
 
     def send_full_file_report(self) -> None:
@@ -706,11 +804,13 @@ class TelegramReporter:
             return
         snap = self._engine.snapshot()
         content = self.build_full_report_text(snap)
-        fname = f"zenith_super_report_{utc_stamp()}.txt"
+        fname = f"zenith_super_comprehensive_{utc_stamp()}.txt"
+        fin = snap.get("financial") or {}
         cap = (
-            f"📄 گزارش کامل SUPER · {utcnow()}\n"
-            f"pairs={len((snap.get('config') or {}).get('assets') or [])} · "
-            f"pos={len(snap.get('positions') or [])} · loops={snap.get('loop_count')}"
+            f"📄 گزارش جامع ۶ساعته SUPER · {utcnow()}\n"
+            f"سرمایه تخصیصی ${ _f(snap.get('config', {}).get('capital_usd'))} · برآورد ربات ${ _f((snap.get('risk') or {}).get('estimated_bot_equity'))} · حساب USDC ${ _f((snap.get('account', {}).get('USDC') or {}).get('equity'))}\n"
+            f"بسته‌شده تأییدشده ۶ساعت: ${ _f(fin.get('verified_closed_net_usdc'))} · کارمزد: ${ _f(fin.get('period_fees_usdc'))} · غیرمحقق: ${ _f(fin.get('unrealized_gross_usdc'))}\n"
+            f"معاملات دوره: {fin.get('execution_count',0)} · پوزیشن باز: {len(snap.get('positions') or [])} · loops={snap.get('loop_count')}"
         )
         self.send_document(fname, content, caption=cap)
 
@@ -783,7 +883,7 @@ class TelegramReporter:
                     reply_markup=self._kb(),
                 )
             elif action == "file":
-                self.send("⏳ ساخت گزارش فایل…")
+                self.send("⏳ ساخت گزارش جامع ۶ساعته…")
                 self.send_full_file_report()
             elif action == "tick":
                 if not eng:
@@ -791,7 +891,6 @@ class TelegramReporter:
                     return
                 self.send("⏳ tick…")
                 res = eng.once()
-                # always acknowledge tick result briefly
                 acts = res.get("actions") or []
                 trades = [a for a in acts if (a.get("status") or "").lower() in TRADE_STATUSES]
                 if trades:
@@ -859,7 +958,7 @@ class TelegramReporter:
         elif cmd == "/trades":
             self.send(self.format_trades_brief(), reply_markup=self._kb())
         elif cmd == "/file":
-            self.send("⏳…")
+            self.send("⏳ ساخت گزارش جامع ۶ساعته…")
             self.send_full_file_report()
         elif cmd == "/tick":
             if not eng:
@@ -896,7 +995,6 @@ class TelegramReporter:
                 if now - self._last_full_report >= self.full_report_hours * 3600:
                     self.send_full_file_report()
                     self._last_full_report = now
-                # light heartbeat panel every heartbeat_minutes (not full spam)
                 if now - self._last_heartbeat >= self.heartbeat_minutes * 60:
                     if self._engine:
                         self.send(self.format_status(self._engine.snapshot()), reply_markup=self._kb())

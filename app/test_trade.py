@@ -265,12 +265,19 @@ class TimedTestTrade:
         return self.snapshot()
 
     def _record(self, fill, phase):
+        # Ensure before-position is captured for FIFO accounting
+        try:
+            if self.state.get("instrument") not in self.engine._before_positions:
+                self.engine._before_positions[self.state["instrument"]] = {"quantity": 0.0 if phase == "entry" else float(self.state.get("entry_filled_amount") or 0), "average_price": None}
+        except Exception:
+            pass
         action = {**fill, "asset": self.state["asset"], "instrument": self.state["instrument"],
                   "status": "test_opened" if phase == "entry" else "test_closed_fill",
                   "amount": fill["filled_amount"], "price": fill.get("average_price") or 0,
                   "notional_usd": fill["filled_amount"]*float(fill.get("average_price") or 0),
                   "direction": "buy" if phase == "entry" else "sell", "reduce_only": phase != "entry",
-                  "label": (self.state.get("pending") or {}).get("label"), "test_id": self.state["id"]}
+                  "label": (self.state.get("pending") or {}).get("label"), "test_id": self.state["id"],
+                  "native_trades": fill.get("native_trades") or []}
         existing = next((x for x in self.engine.state.orders_log if x.get("order_id") == fill.get("order_id")), None)
         if existing and fill["filled_amount"] > float(existing.get("filled_amount") or 0):
             updated = {**existing, **action}
@@ -278,6 +285,10 @@ class TimedTestTrade:
             if not fill.get("trade_ids"):
                 updated["fee"] = existing.get("fee")
             self.engine.state.orders_log = [updated if x is existing else x for x in self.engine.state.orders_log]
+            try:
+                self.engine.financial.record(updated, self.engine._before_positions.get(self.state["instrument"]))
+            except Exception:
+                pass
         else:
             self.engine._log_fill(action)
         self.engine.state.diagnostics = {**self.engine.state.diagnostics,

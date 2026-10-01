@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 from app.config import Settings, get_settings
 from app.deribit import DeribitAPIError, DeribitClient
 from app.execution import fill_summary, floor_amount, ioc_price, plan_rebalance, signed_position
+from app.financial_reports import FinancialReporting
 from app.sleeves import parse_weights, prepare_frames, run_all_sleeves
 from app.telegram_bot import get_reporter
 from app.test_trade import TimedTestTrade
@@ -80,9 +81,11 @@ class TradingEngine:
         self._last_review = 0.0
         self._previous_open_count: Optional[int] = None
         self._recovered_fills: List[dict] = []
+        self._before_positions: Dict[str, dict] = {}
         Path(self.settings.state_path).parent.mkdir(parents=True, exist_ok=True)
         self._restore()
         self.test_trader = TimedTestTrade(self)
+        self.financial = FinancialReporting(self)
 
     def _restore(self):
         try:
@@ -105,6 +108,10 @@ class TradingEngine:
         self._stop.clear()
         self.state.running, self.state.mode = True, "starting"
         self.test_trader.begin_recovery()
+        try:
+            self.financial.start(notifier=self._on_financial_event)
+        except Exception as exc:
+            self.state.push("warning", f"financial reporting not started: {type(exc).__name__}")
         self._thread = threading.Thread(target=self._loop, name="superbot-loop", daemon=True)
         self._thread.start()
         self.state.push("info", "SUPER engine started; execution requires fresh open books")
@@ -113,8 +120,21 @@ class TradingEngine:
         self._stop.set()
         self._wake_cycle.set()
         self.test_trader.request_close()
+        try:
+            self.financial.stop()
+        except Exception:
+            pass
         self.state.running, self.state.mode = False, "stopping" if self.state.cycle_in_progress else "stopped"
         self.state.push("info", "engine stop requested; no new orders after stop")
+
+    def _on_financial_event(self, event: dict, snapshot: dict) -> bool:
+        try:
+            rep = get_reporter()
+            if rep and hasattr(rep, "on_financial_event"):
+                return bool(rep.on_financial_event(event, snapshot))
+        except Exception:
+            log.warning("financial event notification unavailable", exc_info=True)
+        return False
 
     def snapshot(self) -> dict:
         # No network/cycle lock here: /health must stay responsive during a slow API request.
@@ -123,6 +143,11 @@ class TradingEngine:
         result["bot"] = "zenith-SUPER"
         if hasattr(self, "test_trader"):
             result["test_trade"] = self.test_trader.snapshot()
+        if hasattr(self, "financial"):
+            try:
+                result["financial"] = self.financial.snapshot()
+            except Exception as exc:
+                result["financial"] = {"error": str(exc), "schema": "financial-reports-v3"}
         result["events"] = result["events"][-60:]
         result["config"] = {
             "capital_usd": s.capital_usd, "lev_cap": s.lev_cap, "long_only": s.long_only,
@@ -427,8 +452,14 @@ class TradingEngine:
         latched = bool(self.state.risk.get("drawdown_latched"))
         inventory = {}
         try:
+            self._before_positions = {}
             for inst, position in by_inst.items():
                 inventory[inst] = signed_position(position)
+                self._before_positions[inst] = {
+                    "quantity": inventory[inst],
+                    "average_price": position.get("average_price"),
+                    "mark_price": position.get("mark_price"),
+                }
         except Exception as exc:
             fatal.append(f"position_units_invalid: {exc}")
         market_data, actions, executable = {}, [], []
@@ -594,6 +625,10 @@ class TradingEngine:
         self.state.pending_order = {"asset": action["asset"], "instrument": action["instrument"],
                                     "label": label, "direction": plan.direction, "requested_amount": plan.amount,
                                     "price": action["limit_price"], "submitted_at": utcnow()}
+        # Snapshot before-position for precise FIFO P&L basis
+        inst = action["instrument"]
+        if inst not in self._before_positions:
+            self._before_positions[inst] = {"quantity": float(action.get("current_size") or 0), "average_price": None}
         self._save()  # persist BEFORE crossing the execution boundary
         try:
             result = client.limit_ioc(action["instrument"], plan.direction, plan.amount, action["limit_price"],
@@ -601,6 +636,7 @@ class TradingEngine:
             fill = fill_summary(result)
             action.update(fill)
             action["label"] = label
+            action["native_trades"] = result.get("trades") or []
             filled = fill["filled_amount"]
             if filled > 0:
                 complete = filled + 1e-12 >= plan.amount
@@ -640,6 +676,19 @@ class TradingEngine:
             "asset", "instrument", "status", "amount", "price", "notional_usd", "order_id", "order_state",
             "filled_amount", "trade_ids", "fee", "fee_currencies", "direction", "reduce_only", "label", "test_id")}}
         self.state.orders_log = (self.state.orders_log+[entry])[-300:]
+        # Financial reporting — separate accounting with before-position basis
+        try:
+            before = self._before_positions.get(action.get("instrument")) if hasattr(self, "_before_positions") else None
+            # Enrich with fee_known flag for precise accounting
+            enriched = {
+                **entry,
+                "fee_known": bool(entry.get("trade_ids")) and entry.get("fee_currencies") == ["USDC"],
+                "owned": str(entry.get("label") or "").startswith(("sup_", "zt60e_", "zt60x_", "zenith")),
+                "native_trades": action.get("native_trades") or [],
+            }
+            self.financial.record(enriched, before)
+        except Exception as exc:
+            log.warning("financial record failed: %s", type(exc).__name__)
 
     def _finish(self, actions: list, market_data: dict, fatal: list) -> dict:
         self.state.actions = actions
