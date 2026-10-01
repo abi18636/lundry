@@ -558,12 +558,25 @@ class TradingEngine:
                         elif inst in self._backoffs and time.time() < self._backoffs[inst]["retry_after"]:
                             block("order_error_backoff", self._backoffs[inst]["error"])
                         else:
-                            limit = ioc_price(book, plan.direction, meta, s.max_slippage_bps)
+                            try:
+                                limit = ioc_price(book, plan.direction, meta, s.max_slippage_bps)
+                            except ValueError as exc:
+                                # Empty book on testnet should not be treated as validation error that blocks whole engine
+                                msg = str(exc).lower()
+                                if "liquidity" in msg or "executable" in msg:
+                                    block("no_liquidity", f"{exc}: book has no executable side for {plan.direction}")
+                                else:
+                                    block("execution_validation_error", str(exc))
+                                continue
                             action["limit_price"] = limit
                             action["can_execute"] = True
                             executable.append((plan, action))
                 except Exception as exc:
-                    block("execution_validation_error", str(exc))
+                    # Keep validation errors distinct from liquidity issues
+                    if "liquidity" in str(exc).lower():
+                        block("no_liquidity", str(exc))
+                    else:
+                        block("execution_validation_error", str(exc))
         self.state.market_data = market_data
         # Account-wide gross, including positions outside the configured universe.
         reference_prices = {s.instrument_for(a): float((net_book.get(a) or {}).get("price") or (samples[a].get("book") or {}).get("mark_price") or 0) for a in s.asset_list}
