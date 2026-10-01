@@ -602,7 +602,7 @@ class TradingEngine:
         blockers = {k: v for k, v in counts.items() if k not in {
             "no_signal", "target_reached", "skip_small", "bought", "sold", "closed", "reduced", "partially_filled"}}
         severe = {"error", "execution_uncertain", "order_pending", "safety_blocked", "execution_validation_error",
-                  "instrument_unavailable", "candle_api_error", "order_error_backoff", "risk_cap_blocked"}
+                  "instrument_unavailable", "market_api_error", "market_unknown", "candle_api_error", "order_error_backoff", "risk_cap_blocked"}
         any_fill = any(float(a.get("filled_amount") or 0) > 0 for a in actions)
         usable = sum(a.get("can_execute", False) or a["status"] in ("no_signal", "target_reached", "skip_small")
                      for a in actions if a.get("market_state") == "open")
@@ -618,7 +618,9 @@ class TradingEngine:
         elif halted_count == len(self.settings.asset_list):
             primary = "venue_halted"
         elif open_count == 0:
-            primary = "no_open_markets"
+            # API/protocol failures are operational errors, NOT an exchange maintenance halt.
+            primary = next((k for k in ("market_api_error", "instrument_unavailable", "market_unknown") if counts.get(k)),
+                           "no_open_markets")
         elif active_count and not any(
                 abs(float(a.get("desired_coin") or 0)) > 0 and
                 (a.get("can_execute") or a["status"] in ("target_reached", "skip_small"))

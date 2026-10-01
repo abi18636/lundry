@@ -98,14 +98,15 @@ def main():
                            market_open_count=opened, active_signal_assets=active,
                            primary_blocker="venue_halted" if halted == n_assets and n_assets else "legacy_readiness_schema")
     primary = diagnostics.get("primary_blocker")
-    order_errors = [a for a in actions if a.get("status") in ("error", "failed", "execution_uncertain", "execution_validation_error", "order_error_backoff")]
+    order_errors = [a for a in actions if a.get("status") in ("error", "failed", "execution_uncertain", "execution_validation_error", "order_error_backoff",
+                                                              "market_api_error", "market_unknown", "instrument_unavailable", "candle_api_error", "safety_blocked")]
     # A halted asset must never suppress genuine errors in another open asset.
     if order_errors:
         issues.append(f"execution problems={len(order_errors)}")
     if health.get("last_error"):
         issues.append("cycle error: "+str(health["last_error"]))
     severe = {"cycle_error", "account_unavailable", "positions_unavailable", "execution_uncertain", "strategy_error",
-              "error", "order_error_backoff", "execution_validation_error", "mainnet_not_authorized", "market_api_error"}
+              "error", "order_error_backoff", "execution_validation_error", "mainnet_not_authorized", "market_api_error", "market_unknown", "instrument_unavailable"}
     if primary in severe and not order_errors and not health.get("last_error"):
         issues.append("trading blocker: "+str(primary))
     review = {

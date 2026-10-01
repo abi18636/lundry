@@ -59,7 +59,7 @@
 
 ## پذیرش فنی
 
-`python -m pytest -q tests` — ۷۱ آزمون پاس شده است. تعداد نهایی و تأیید deploy در گزارش نهایی درج می‌شود.
+`python -m pytest -q tests` — ۷۶ آزمون پاس شده است. تعداد نهایی و تأیید deploy در گزارش نهایی درج می‌شود.
 
 پوشش: خرید، کاهش، خروج کوچک معتبر، پوشش short، flip دومرحله‌ای، حداقل lot، سقف سرمایه بعد از rounding، collateral مشترک، halt/reopen، stale data، fail-closed account/positions، fill/partial/unfilled، ambiguity/reconciliation، عدم افشای secret در URL، آماده‌بودن واقعی، استقلال sleeve، حذف باگ impulse و عدم اسپم تلگرام.
 
@@ -72,3 +72,5 @@
 - به‌روزرسانی نهایی حداقل lot را حتی در بازار halted نشان می‌دهد و ارسال کلید تست‌نت به مقصد غیرمجاز یا mainnet بدون مجوز را متوقف می‌کند.
 - workflow بیرونی در workspace موجود است، اما GitHub push آن را به‌دلیل نبودن scope `workflow` رد کرد. نصب روی GitHub و زمان‌بندی بیرونی **انجام نشده** است. مرور ساعتی داخل Render فعال و نخستین مرور ثبت شده است.
 - تا بازگشایی venue، پذیرش fill واقعی این نسخه ناتمام است؛ آزمون فنی یا mock جایگزین آن نیست.
+
+- پوشش watchdog نهایی: halt یک بازار، خطای بازار دیگر را نمی‌پوشاند؛ API/protocol failure به‌صورت ERROR گزارش می‌شود؛ recovery بدون توکن حتی درخواست مدیریتی هم نمی‌فرستد.
