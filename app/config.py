@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Dict, List
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,8 +18,8 @@ class Settings(BaseSettings):
     dry_run: bool = False
 
     # SUPER BOT total capital across independent sleeves
-    capital_usd: float = 100.0
-    lev_cap: float = 1.0
+    capital_usd: float = Field(default=100.0, gt=0)
+    lev_cap: float = Field(default=1.0, gt=0, le=1.0)
     long_only: bool = True
     assets: str = "BTC,ETH,SOL,XRP,DOGE,BNB,ADA,AVAX,LINK,DOT,LTC,BCH,UNI,ATOM,NEAR,APT,ARB,OP,SUI,FIL,INJ,SEI,WLD,TRX,TAO"
 
@@ -34,8 +35,16 @@ class Settings(BaseSettings):
     strategy_profile: str = "super"
 
     loop_seconds: int = 60
-    max_notional_usd: float = 500.0  # hard cap total bot notional
-    min_notional_usd: float = 10.0
+    max_notional_usd: float = 100.0  # engine also caps at allocated equity * lev_cap
+    min_notional_usd: float = 10.0  # legacy only; NEVER forces target size upward
+    rebalance_notional_usd: float = Field(default=1.0, ge=0)
+    market_data_max_age_seconds: int = Field(default=180, ge=10)
+    max_signal_no_trade_hours: float = Field(default=6.0, gt=0)
+    max_spread_bps: float = Field(default=100.0, gt=0)
+    max_slippage_bps: float = Field(default=50.0, ge=0, le=100)
+    max_drawdown_pct: float = Field(default=0.15, gt=0, le=0.15)
+    ops_review_seconds: int = Field(default=3600, ge=60)
+    allow_mainnet_trading: bool = False
     candle_lookback_hours: int = 2500
     dashboard_token: str = ""
     log_level: str = "INFO"
@@ -56,7 +65,7 @@ class Settings(BaseSettings):
 
     @property
     def asset_list(self) -> List[str]:
-        return [a.strip().upper() for a in self.assets.split(",") if a.strip()]
+        return list(dict.fromkeys(a.strip().upper() for a in self.assets.split(",") if a.strip()))
 
     @property
     def enabled_sleeves(self) -> List[str]:

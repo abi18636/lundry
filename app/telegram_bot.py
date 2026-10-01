@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import html
 import io
+import json
 import logging
 import re
 import threading
@@ -24,8 +25,7 @@ log = logging.getLogger("telegram")
 
 # Real order statuses that warrant a trade alert
 TRADE_STATUSES = {
-    "bought", "sold", "reduced", "closed",
-    "dry_run_buy", "dry_run_sell", "dry_run_close",
+    "bought", "sold", "reduced", "closed", "partially_filled", "recovered_fill",
     "error", "failed",
 }
 
@@ -85,6 +85,9 @@ class TelegramReporter:
         self._last_heartbeat = 0.0
         self._last_full_report = 0.0
         self._last_halt_notice = 0.0
+        self._last_problem_notice = 0.0
+        self._last_problem = ""
+        self._previous_open_count = None
         self._panel_msg_id: Optional[int] = None
         self.stats = {
             "sent": 0,
@@ -110,7 +113,7 @@ class TelegramReporter:
                 r = self._http.post(url, data=params)
             data = r.json()
         except Exception as e:
-            data = {"ok": False, "description": str(e)}
+            data = {"ok": False, "description": str(e).replace(self.token, "<redacted>")}
         if not data.get("ok"):
             if method not in ("getUpdates",):
                 log.warning("telegram %s fail: %s", method, str(data)[:400])
@@ -178,7 +181,7 @@ class TelegramReporter:
             self.send(f"<b>{_esc(filename)}</b>\n<pre>{_esc(content[:3500])}</pre>")
             return False
         except Exception as e:
-            log.exception("sendDocument: %s", e)
+            log.warning("sendDocument failed: %s", type(e).__name__)
             self.stats["failed"] += 1
             return False
 
@@ -300,6 +303,14 @@ class TelegramReporter:
             f"<b>آمار سفارش</b> ✅{st['orders_ok']} ⏭{st['orders_skip']} ❌{st['orders_err']}",
             f"alerts: {st['trades_alerted']} · files: {st['files_sent']}",
         ]
+        dg = snap.get("diagnostics") or {}
+        lines.extend([
+            "", "<b>آمادگی واقعی معامله</b>",
+            f"state=<code>{_esc(dg.get('trading_state'))}</code> · blocker=<code>{_esc(dg.get('primary_blocker') or 'none')}</code>",
+            f"بازار باز {dg.get('market_open_count', 0)}/{len(assets)} · halted={dg.get('market_halted_count', 0)}",
+            f"نماد دارای سیگنال: {dg.get('active_signal_assets', 0)} · fill تأییدشده: {dg.get('confirmed_fill_count', 0)}",
+            f"آخرین fill: {_esc(snap.get('last_fill_at') or 'none')}",
+        ])
         if self.dashboard_url:
             lines.append(f"Web: {_esc(self.dashboard_url)}")
         return "\n".join(lines)
@@ -419,6 +430,8 @@ class TelegramReporter:
                 f"  amt={_esc(a.get('amount'))} ${_f(a.get('notional_usd'))} "
                 f"px={_f(a.get('price'), 4)}"
             )
+            if a.get("order_id"):
+                lines.append(f"  order_id=<code>{_esc(a.get('order_id'))}</code> filled={_esc(a.get('filled_amount'))}")
             if a.get("error"):
                 lines.append(f"  {_esc(a.get('error'))[:240]}")
             # journal
@@ -467,6 +480,13 @@ class TelegramReporter:
         lines.append(f"assets={','.join(assets)}")
         lines.append(f"sleeves_enabled={cfg.get('sleeves_enabled')}")
         lines.append(f"sleeve_weights={cfg.get('sleeve_weights')}")
+        lines.append("")
+        lines.append("[TRADING_READINESS]")
+        lines.append(json.dumps(snap.get("diagnostics") or {}, ensure_ascii=False, indent=2))
+        lines.append("[RISK]")
+        lines.append(json.dumps(snap.get("risk") or {}, ensure_ascii=False, indent=2))
+        lines.append("[LATEST_HOURLY_REVIEW]")
+        lines.append(json.dumps((snap.get("ops_reviews") or [])[-1:], ensure_ascii=False, indent=2))
         lines.append("")
         lines.append("[ACCOUNT]")
         for cur, v in acct.items():
@@ -560,41 +580,54 @@ class TelegramReporter:
     def on_cycle(self, result: dict, *, loop_count: int = 0, error: Optional[str] = None) -> None:
         if not self.enabled:
             return
+        now = time.time()
         if error:
             self.stats["cycles_err"] += 1
-            self.send(
-                f"🚨 <b>CYCLE ERROR</b>\n🕐 {utcnow()} · loop {_esc(loop_count)}\n"
-                f"<code>{_esc(error)[:1500]}</code>",
-                reply_markup=self._kb(),
-            )
+            if error != self._last_problem or now-self._last_problem_notice >= 600:
+                self.send(f"🚨 <b>CYCLE ERROR</b>\n🕐 {utcnow()} · loop {_esc(loop_count)}\n"
+                          f"<code>{_esc(error)[:1500]}</code>", reply_markup=self._kb())
+                self._last_problem, self._last_problem_notice = error, now
             return
         self.stats["cycles_ok"] += 1
         actions = result.get("actions") or []
-        # count skips
-        for a in actions:
-            st = (a.get("status") or "").lower()
-            if st in TRADE_STATUSES:
-                continue
-            self.stats["orders_skip"] += 1
-        trades = [a for a in actions if (a.get("status") or "").lower() in TRADE_STATUSES]
-        if trades:
-            msg = self.format_trade_alert(trades, loop_count=loop_count)
-            if msg:
-                self.send(msg, reply_markup=self._kb())
-        # One compact notice if venue markets are halted (testnet maintenance)
-        halted = [a for a in actions if str(a.get("status") or "").startswith("market_") and a.get("status") != "market_open"]
-        if halted and (time.time() - self._last_halt_notice) > 6 * 3600:
-            st = halted[0].get("status") or "market_halted"
-            self.send(
-                f"⏸️ <b>Venue markets not open</b>\n"
-                f"status=<code>{_esc(st)}</code> · pairs_flagged={len(halted)}/{len(actions)}\n"
-                f"Orders paused until Deribit state=open.\n"
-                f"Signals still computed; no spam each loop.",
-                reply_markup=self._kb(),
-            )
-            self._last_halt_notice = time.time()
-        elif not self.trade_only:
-            pass
+        for action in actions:
+            if (action.get("status") or "").lower() not in TRADE_STATUSES:
+                self.stats["orders_skip"] += 1
+        # No dry-run or merely acknowledged order is described as a real trade.
+        fills = [a for a in actions if float(a.get("filled_amount") or 0) > 0]
+        fills += result.get("recovered_fills") or []
+        failures = [a for a in actions if a.get("status") in ("error", "failed")]
+        signature = " | ".join(str(a.get("error")) for a in failures)
+        if failures and signature == self._last_problem and now-self._last_problem_notice < 600:
+            failures = []
+        if failures:
+            self._last_problem, self._last_problem_notice = signature, now
+        alerts = fills+failures
+        if alerts:
+            text = self.format_trade_alert(alerts, loop_count=loop_count)
+            if text:
+                self.send(text, reply_markup=self._kb())
+        dg = result.get("diagnostics") or {}
+        opened = dg.get("market_open_count", 0)
+        if self._previous_open_count == 0 and opened > 0:
+            self.send(f"▶️ <b>بازگشایی بازار تست‌نت تأیید شد</b>\nبازار باز: {opened}\n"
+                      f"مسیر معامله: {_esc(dg.get('trading_state'))}\n"
+                      f"ورود فقط پس از کنترل داده تازه، حداقل لات و ریسک مجاز است.", reply_markup=self._kb())
+        self._previous_open_count = opened
+        halted = [a for a in actions if a.get("market_state") == "halted"]
+        if halted and now-self._last_halt_notice >= 6*3600:
+            self.send(f"⏸️ <b>معامله واقعی مسدود است؛ وب‌سرویس روشن است</b>\n"
+                      f"Deribit testnet: halted={len(halted)}/{len(actions)}\n"
+                      f"نماد دارای سیگنال: {dg.get('active_signal_assets', 0)}\n"
+                      f"توقف صرافی قابل رفع از داخل ربات نیست. بررسی خودکار هر چرخه ادامه دارد؛ هیچ معاملهٔ شبیه‌سازی واقعی گزارش نمی‌شود.",
+                      reply_markup=self._kb())
+            self._last_halt_notice = now
+        problem = dg.get("primary_blocker")
+        if problem and problem not in ("venue_halted", "no_open_markets") and not failures:
+            if problem != self._last_problem or now-self._last_problem_notice >= 6*3600:
+                self.send(f"🛠️ <b>مانع مسیر معامله</b>\n<code>{_esc(problem)}</code>\n"
+                          f"state={_esc(dg.get('trading_state'))} · loop={loop_count}", reply_markup=self._kb())
+                self._last_problem, self._last_problem_notice = problem, now
 
     def send_full_file_report(self) -> None:
         if not self.enabled or not self._engine:

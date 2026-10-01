@@ -27,3 +27,21 @@ Render free + GitHub. Health: `/health` (use UptimeRobot on this URL).
 ## API
 - `GET /health` `GET /api/status` `GET /api/sleeves`
 - `POST /api/tick` `POST /api/start` `POST /api/stop`
+
+## Coordinated execution repair (2026-10-01)
+
+See `COORDINATED_REPAIR_FA.md`. The venue must be `open` and quotes fresh.
+Service liveness does **not** imply trading readiness: inspect `trading_ready`,
+`primary_blocker`, and `/api/diagnostics`. Only exchange-confirmed fills count.
+
+- Completed hourly bars; funded Apex 80/20 legs (no vote discarding impulse).
+- Exchange lot flooring never inflates the allocation.
+- Sign-correct inventory; reduce-only exits; slippage-bounded limit IOC.
+- <=1x allocated notional cap, collateral reservation and a drawdown stop threshold.
+- Fail-closed account reads and unique-label reconciliation after ambiguous execution.
+- Public control is disabled: set `DASHBOARD_TOKEN` for HTTP Start/Stop/Tick.
+- Risk state on Render free is ephemeral; use a dedicated account and durable state before real-money deployment.
+- New 25-asset live allocation is NOT the bit-exact three-asset historical backtest portfolio.
+
+Tests: `python -m pip install pytest && python -m pytest -q tests`.
+Hourly reviews run inside the service; the GitHub workflow (if installed successfully) also checks external health.

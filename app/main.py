@@ -1,88 +1,87 @@
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 
 from app.config import get_settings
-from app.engine import get_engine
-from app.telegram_bot import init_reporter_from_settings, get_reporter
+from app.engine import EngineBusyError, get_engine
+from app.telegram_bot import get_reporter, init_reporter_from_settings
 
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
+# Telegram URLs contain the bot token. Never log HTTP request URLs at INFO.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "2026-10-01-coordinated-repair-v1"
 
 
-def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None):
-    s = get_settings()
-    if not s.dashboard_token:
+def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
+    expected = get_settings().dashboard_token
+    if not expected:
+        if control:
+            raise HTTPException(403, "Public control is disabled. Set DASHBOARD_TOKEN in Render; Telegram owner controls remain available.")
         return
-    tok = None
-    if x_token:
-        tok = x_token
-    elif authorization and authorization.lower().startswith("bearer "):
-        tok = authorization.split(" ", 1)[1].strip()
-    if tok != s.dashboard_token:
+    token = x_token or (authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else "")
+    if not token or not hmac.compare_digest(token, expected):
         raise HTTPException(401, "unauthorized")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    s = get_settings()
-    eng = get_engine()
-    log.info("SUPER boot capital=%s sleeves=%s dry=%s", s.capital_usd, s.enabled_sleeves, s.dry_run)
+    settings, engine = get_settings(), get_engine()
+    log.info("SUPER boot: build=%s allocated_capital=%s sleeves=%s dry_run=%s", BUILD, settings.capital_usd, settings.enabled_sleeves, settings.dry_run)
     try:
-        rep = init_reporter_from_settings(s)
-        if rep:
-            rep.bind_engine(eng)
-            rep.start_background()
-            log.info("telegram enabled=%s chat=%s", rep.enabled, bool(s.telegram_chat_id))
+        reporter = init_reporter_from_settings(settings)
+        if reporter:
+            reporter.bind_engine(engine)
+            reporter.start_background()
     except Exception:
-        log.exception("telegram init failed")
-    try:
-        eng.start()
-    except Exception:
-        log.exception("engine start failed")
+        log.exception("telegram initialization failed")
+    engine.start()
     yield
-    try:
-        r = get_reporter()
-        if r:
-            r.stop()
-    except Exception:
-        pass
-    eng.stop()
+    reporter = get_reporter()
+    if reporter:
+        reporter.stop()
+    engine.stop()
 
 
-app = FastAPI(
-    title="Zenith SUPER Trader",
-    description="Independent multi-sleeve bot: zenith + almasi + inst-v3 (no DNA mix)",
-    version="2.0.0",
-    lifespan=lifespan,
-)
+app = FastAPI(title="Zenith SUPER Trader", version="3.0.0", description="Independent sleeves; observable and risk-capped testnet execution", lifespan=lifespan)
 
 
 @app.get("/health")
 def health():
-    eng = get_engine()
-    snap = eng.snapshot()
-    s = get_settings()
+    engine, settings = get_engine(), get_settings()
+    # Read only small atomic state references, without holding the execution lock.
+    state = engine.state
+    diagnostic = state.diagnostics
+    last = state.last_loop_at
+    try:
+        age = (datetime.now(timezone.utc)-datetime.fromisoformat(last)).total_seconds() if last else None
+    except (TypeError, ValueError):
+        age = None
+    fresh = age is not None and age < max(600, 5 * settings.loop_seconds)
     return {
-        "ok": True,
-        "bot": "zenith-SUPER",
-        "build": os.getenv("GIT_SHA", "e4cb6ca-haltgate"),
-        "running": snap["running"],
-        "mode": snap["mode"],
-        "loop_count": snap["loop_count"],
-        "last_loop_at": snap["last_loop_at"],
-        "last_error": snap["last_error"],
-        "n_sleeves": len(snap.get("sleeves") or []),
-        "n_assets": len(s.asset_list),
+        "ok": True, "liveness_ok": True, "bot": "zenith-SUPER", "build": BUILD,
+        "running": state.running, "mode": state.mode, "loop_count": state.loop_count,
+        "last_loop_at": last, "loop_age_seconds": age, "last_error": state.last_error,
+        "cycle_in_progress": state.cycle_in_progress, "cycle_started_at": state.cycle_started_at,
+        "n_sleeves": len(state.sleeves), "n_assets": len(settings.asset_list),
+        "trading_ready": bool(state.running and fresh and diagnostic.get("trading_ready")),
+        "trading_state": diagnostic.get("trading_state", "initializing"),
+        "primary_blocker": diagnostic.get("primary_blocker"),
+        "market_open_count": diagnostic.get("market_open_count", 0),
+        "market_halted_count": diagnostic.get("market_halted_count", 0),
+        "active_signal_assets": diagnostic.get("active_signal_assets", 0),
+        "confirmed_fill_count": diagnostic.get("confirmed_fill_count", 0),
+        "last_fill_at": state.last_fill_at,
+        "last_ops_review_at": state.ops_reviews[-1]["at"] if state.ops_reviews else None,
     }
 
 
@@ -92,166 +91,45 @@ def status(authorization: Optional[str] = Header(None), x_token: Optional[str] =
     return get_engine().snapshot()
 
 
+@app.get("/api/diagnostics")
+def diagnostics(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    snap = get_engine().snapshot()
+    return {"build": BUILD, "diagnostics": snap["diagnostics"], "market_data": snap["market_data"],
+            "risk": snap["risk"], "actions": snap["actions"], "pending_order": snap["pending_order"],
+            "ops_reviews": snap["ops_reviews"]}
+
+
 @app.get("/api/sleeves")
 def sleeves(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token)
     snap = get_engine().snapshot()
-    return {"sleeves": snap.get("sleeves"), "net_book": snap.get("net_book"), "config": snap.get("config")}
+    return {"sleeves": snap["sleeves"], "net_book": snap["net_book"], "config": snap["config"]}
 
 
 @app.post("/api/start")
 def start(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
-    _check_token(authorization, x_token)
+    _check_token(authorization, x_token, control=True)
     get_engine().start()
     return {"started": True}
 
 
 @app.post("/api/stop")
 def stop(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
-    _check_token(authorization, x_token)
+    _check_token(authorization, x_token, control=True)
     get_engine().stop()
     return {"stopped": True}
 
 
 @app.post("/api/tick")
 def tick(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
-    _check_token(authorization, x_token)
+    _check_token(authorization, x_token, control=True)
     try:
-        result = get_engine().once()
-        return {"ok": True, "result": result}
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
-@app.get("/", response_class=HTMLResponse)
-def dashboard():
-    s = get_settings()
-    return f"""<!doctype html>
-<html lang="fa" dir="rtl">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Zenith SUPER Bot</title>
-<style>
-:root {{ --bg:#070b14; --card:#101827; --line:#1f2a3d; --tx:#e8eefc; --acc:#67e8f9; --ok:#4ade80; --bad:#f87171; --mut:#94a3b8; }}
-*{{box-sizing:border-box}} body{{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--tx)}}
-header{{padding:1rem 1.25rem;border-bottom:1px solid var(--line);display:flex;gap:.75rem;flex-wrap:wrap;align-items:center}}
-h1{{margin:0;font-size:1.2rem;color:var(--acc)}}
-.badge{{padding:.2rem .55rem;border-radius:999px;background:#1e293b;font-size:.78rem}}
-.ok{{color:var(--ok)}} .bad{{color:var(--bad)}}
-main{{padding:1rem;display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}}
-.card{{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:1rem}}
-.card h2{{margin:0 0 .7rem;font-size:.95rem;color:var(--acc)}}
-table{{width:100%;border-collapse:collapse;font-size:.82rem}}
-th,td{{border-bottom:1px solid var(--line);padding:.35rem;text-align:right;vertical-align:top}}
-button{{background:#06b6d4;color:#04101c;border:0;border-radius:10px;padding:.5rem .9rem;font-weight:700;cursor:pointer;margin-left:.35rem}}
-button.sec{{background:#334155;color:#fff}}
-pre{{white-space:pre-wrap;word-break:break-word;font-size:.72rem;background:#0a101b;padding:.7rem;border-radius:10px;max-height:260px;overflow:auto}}
-.muted{{color:var(--mut);font-size:.85rem}}
-.pill{{display:inline-block;padding:.1rem .45rem;border-radius:6px;background:#0f172a;margin:0 .15rem;font-size:.75rem}}
-.on{{border:1px solid #4ade80}} .off{{opacity:.5}}
-</style>
-</head>
-<body>
-<header>
-  <h1>⚡ Zenith SUPER Trader</h1>
-  <span class="badge" id="run">…</span>
-  <span class="badge">capital ${s.capital_usd:g} · lev≤{s.lev_cap}</span>
-  <span class="badge">Deribit testnet</span>
-  <span class="badge">independent sleeves</span>
-  <div style="margin-right:auto">
-    <button onclick="api('tick')">Tick</button>
-    <button class="sec" onclick="api('start')">Start</button>
-    <button class="sec" onclick="api('stop')">Stop</button>
-  </div>
-</header>
-<main>
-  <section class="card">
-    <h2>وضعیت سوپرربات</h2>
-    <div id="status" class="muted">loading…</div>
-  </section>
-  <section class="card">
-    <h2>حساب</h2>
-    <pre id="account">—</pre>
-  </section>
-  <section class="card" style="grid-column:1/-1">
-    <h2>آستین‌های مستقل (بدون مخلوط DNA)</h2>
-    <p class="muted">هر استراتژی سرمایه و سیگنال خودش را دارد. فقط در لایهٔ سفارش با هم جمع می‌شوند.</p>
-    <div id="sleeve_pills"></div>
-    <table>
-      <thead><tr><th>Sleeve</th><th>W</th><th>Cap $</th><th>BTC</th><th>ETH</th><th>SOL</th><th>Note</th></tr></thead>
-      <tbody id="sleeves"></tbody>
-    </table>
-  </section>
-  <section class="card" style="grid-column:1/-1">
-    <h2>دفتر خالص (net book) → سفارش صرافی</h2>
-    <table>
-      <thead><tr><th>Asset</th><th>Target coin</th><th>Notional $</th><th>Contributors</th></tr></thead>
-      <tbody id="net"></tbody>
-    </table>
-  </section>
-  <section class="card" style="grid-column:1/-1">
-    <h2>پوزیشن / اکشن / رویداد</h2>
-    <pre id="tail">—</pre>
-  </section>
-</main>
-<script>
-function sideCell(pa){{
-  if(!pa) return '—';
-  const s = pa.side>0 ? 'LONG' : 'FLAT';
-  const n = (pa.notional_usd||0).toFixed(1);
-  return `${{s}} $${{n}}`;
-}}
-async function refresh(){{
-  try{{
-    const r = await fetch('/api/status');
-    const d = await r.json();
-    const run = document.getElementById('run');
-    run.textContent = d.running ? 'RUNNING' : 'STOPPED';
-    run.className = 'badge ' + (d.running ? 'ok' : 'bad');
-    document.getElementById('status').innerHTML =
-      `bot: <b>${{d.bot||'SUPER'}}</b><br/>mode: <b>${{d.mode}}</b><br/>loops: ${{d.loop_count}}<br/>last: ${{d.last_loop_at||'—'}}<br/>error: <span class="${{d.last_error?'bad':''}}">${{d.last_error||'none'}}</span><br/>sleeves: ${{(d.sleeves||[]).length}}`;
-    document.getElementById('account').textContent = JSON.stringify(d.account, null, 2);
-    const tb = document.getElementById('sleeves'); tb.innerHTML='';
-    const pills = document.getElementById('sleeve_pills'); pills.innerHTML='';
-    (d.sleeves||[]).forEach(s => {{
-      const sp = document.createElement('span');
-      sp.className = 'pill on';
-      sp.textContent = s.id + ' ' + Math.round((s.weight||0)*100) + '%';
-      pills.appendChild(sp);
-      const tr = document.createElement('tr');
-      const pa = s.per_asset||{{}};
-      tr.innerHTML = `<td><b>${{s.id}}</b><br/><span class="muted">${{s.title||''}}</span></td>
-        <td>${{((s.weight||0)*100).toFixed(0)}}%</td>
-        <td>${{(s.capital||0).toFixed(1)}}</td>
-        <td>${{sideCell(pa.BTC)}}</td>
-        <td>${{sideCell(pa.ETH)}}</td>
-        <td>${{sideCell(pa.SOL)}}</td>
-        <td class="muted">${{s.notes||''}}</td>`;
-      tb.appendChild(tr);
-    }});
-    const nb = document.getElementById('net'); nb.innerHTML='';
-    const book = d.net_book||{{}};
-    Object.keys(book).forEach(a => {{
-      const b = book[a];
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${{a}}</td><td>${{(b.target_coin||0).toFixed(6)}}</td>
-        <td>${{(b.notional_usd||0).toFixed(2)}}</td>
-        <td><code>${{JSON.stringify(b.contributors||{{}})}}</code></td>`;
-      nb.appendChild(tr);
-    }});
-    document.getElementById('tail').textContent = JSON.stringify({{
-      positions: d.positions, actions: d.actions, events: (d.events||[]).slice(-15), orders: d.orders_log
-    }}, null, 2);
-  }}catch(e){{ document.getElementById('status').textContent = e; }}
-}}
-async function api(name){{
-  await fetch('/api/'+name, {{method:'POST'}});
-  setTimeout(refresh, 1000);
-}}
-refresh(); setInterval(refresh, 10000);
-</script>
-</body></html>"""
+        return {"ok": True, "result": get_engine().once()}
+    except EngineBusyError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from None
 
 
 @app.get("/api/healthz")
@@ -261,20 +139,55 @@ def healthz():
 
 @app.post("/api/telegram/test")
 def telegram_test(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
-    _check_token(authorization, x_token)
-    rep = get_reporter()
-    if not rep or not rep.enabled:
+    _check_token(authorization, x_token, control=True)
+    reporter = get_reporter()
+    if not reporter or not reporter.enabled:
         raise HTTPException(400, "telegram not configured")
-    rep.send_dashboard()
-    return {"ok": True, "stats": rep.stats}
+    reporter.send_panel()
+    return {"ok": True, "stats": reporter.stats}
 
 
 @app.post("/api/telegram/report")
 def telegram_report(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
-    _check_token(authorization, x_token)
-    rep = get_reporter()
-    if not rep or not rep.enabled:
+    _check_token(authorization, x_token, control=True)
+    reporter = get_reporter()
+    if not reporter or not reporter.enabled:
         raise HTTPException(400, "telegram not configured")
-    eng = get_engine()
-    rep.send(rep.format_dashboard(eng.snapshot()))
+    reporter.send(reporter.format_status(get_engine().snapshot()))
     return {"ok": True}
+
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard():
+    return DASHBOARD_HTML
+
+
+DASHBOARD_HTML = r'''<!doctype html>
+<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Zenith SUPER · مرکز عملیات</title>
+<style>
+:root{color-scheme:dark;--bg:#070e19;--card:#101c2d;--line:#22324a;--text:#e4eaf4;--muted:#91a2ba;--green:#55deb0;--amber:#f4bf5a;--red:#ff8292;--cyan:#70d9eb}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Tahoma,system-ui,sans-serif;font-size:13px;line-height:1.8}header{border-bottom:1px solid var(--line);padding:22px 5vw;display:flex;gap:20px;align-items:center;justify-content:space-between;flex-wrap:wrap}h1{margin:0;font-size:23px;letter-spacing:-.5px}h1 span{color:var(--cyan)}.eyebrow{font-size:10px;letter-spacing:2px;color:var(--muted);direction:ltr;text-align:right}main{max-width:1450px;margin:auto;padding:26px 4vw}.chip{border:1px solid var(--line);border-radius:25px;padding:5px 12px;font-size:11px;display:inline-block}.live{color:var(--green)}.amber{color:var(--amber)}.red{color:var(--red)}.muted{color:var(--muted)}.banner{background:linear-gradient(115deg,#1a2637,#142a36);border:1px solid var(--line);border-right:4px solid var(--amber);border-radius:14px;padding:20px 24px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}.banner h2{margin:0;font-size:17px}.banner p{margin:5px 0 0;color:var(--muted);max-width:950px}.cards{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:12px;margin:20px 0}.card,.panel{border:1px solid var(--line);background:var(--card);border-radius:12px;padding:18px}.card .label{font-size:11px;color:var(--muted)}.card .value{font-size:26px;font-weight:bold;direction:ltr;text-align:right}.card small{color:var(--muted);font-size:10px}.panel{margin-top:18px;padding:0;overflow:hidden}.panel-head{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.panel-head h2{font-size:14px;margin:0}.scroll{overflow:auto}table{border-collapse:collapse;min-width:900px;width:100%;font-size:11px}th,td{text-align:right;border-bottom:1px solid #1d2b40;padding:12px 15px;white-space:nowrap}th{color:var(--muted);font-weight:normal;background:#0d1727}td.asset{font-weight:bold;color:var(--cyan);direction:ltr;text-align:right}.number{font-family:ui-monospace,monospace;direction:ltr;display:inline-block}.long{color:var(--green)}.short{color:var(--red)}.note{white-space:normal;min-width:220px;max-width:420px;color:var(--muted)}.button{background:#142b3a;color:var(--cyan);border:1px solid #305165;border-radius:8px;padding:7px 13px;font-family:inherit;font-size:11px;cursor:pointer}.buttons{display:flex;gap:6px;flex-wrap:wrap}.riskrow{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}.riskrow .panel{margin:0;padding:18px}.kv{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid #1d2b40}.foot{font-size:11px;color:var(--muted);margin:22px 0;line-height:2}pre{max-height:220px;overflow:auto;direction:ltr;text-align:left;font-size:10px;white-space:pre-wrap}.receipt table{min-width:700px}#message{color:var(--amber);padding-top:8px;min-height:16px}.meta{font-size:10px;color:var(--muted)}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-left:5px}
+@media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}.riskrow{grid-template-columns:1fr}.banner{padding:16px}.card .value{font-size:22px}header{padding:17px 4vw}}
+</style></head><body>
+<header><div><div class="eyebrow">INDEPENDENT SLEEVES / OPERATIONS CENTER</div><h1><span>Zenith</span> SUPER</h1><div class="muted">مرکز عملیات و عیب‌یابی معامله</div></div><div><span class="chip">Deribit testnet · پول آزمایشی</span> <span class="chip" id="engine">در حال اتصال</span><div class="meta" id="updated">—</div></div></header>
+<main><section class="banner"><div><h2 id="reason-title">در حال دریافت وضعیت واقعی ربات…</h2><p id="reason-text">سالم‌بودن وب‌سرویس با آماده‌بودن مسیر معامله یکسان نیست.</p></div></section>
+<div class="cards"><div class="card"><div class="label">بازار باز / کل بازارها</div><div class="value" id="markets">—</div><small id="halted">—</small></div><div class="card"><div class="label">نماد دارای سیگنال فعال</div><div class="value" id="signals">—</div><small>سیگنال مستقل ≠ معامله اجراشده</small></div><div class="card"><div class="label">پُرشدن سفارش تأییدشده</div><div class="value live" id="fills">—</div><small>فقط شواهد صرافی؛ نه dry-run</small></div><div class="card"><div class="label">سرمایه تخصیصی / سقف اکسپوژر</div><div class="value" id="capital">—</div><small>بدون افزایش مصنوعی حجم تا حداقل دلخواه</small></div><div class="card"><div class="label">چرخه پایش / آخرین بررسی ساعتی</div><div class="value" id="loops">—</div><small id="ops">—</small></div></div>
+<section class="panel"><div class="panel-head"><h2>ماتریس پنج استراتژی و علت اجرای / عدم اجرای سفارش</h2><span class="meta">همهٔ نمادها · کندل بسته‌شدهٔ یک‌ساعته · بدون ترکیب DNA</span></div><div class="scroll"><table><thead><tr><th>نماد</th><th>Apex · ۲۵٪</th><th>almasi 177-v001 · ۲۵٪</th><th>IV3 Stable · ۳۰٪</th><th>IV3 Primary · ۱۰٪</th><th>Endurance · ۱۰٪</th><th>هدف / لات حداقل</th><th>وضعیت بازار / سن داده</th><th>مانع یا نتیجهٔ سفارش</th></tr></thead><tbody id="matrix"><tr><td colspan="9">در حال دریافت…</td></tr></tbody></table></div></section>
+<div class="riskrow"><section class="panel"><h2 style="font-size:14px;margin-top:0">کنترل ریسک</h2><div id="risk">—</div><p class="meta">آستانه افت سرمایه، تضمین حداکثر زیان نیست. محاسبه تغییر موجودی به حساب USDC اختصاصی نیاز دارد؛ دیسک Render رایگان دائمی نیست.</p></section><section class="panel"><h2 style="font-size:14px;margin-top:0">عملیات و بازیابی</h2><div id="operations">—</div><div class="buttons" style="margin-top:14px"><button class="button" onclick="setToken()">توکن کنترل</button><button class="button" onclick="control('tick')">بررسی اکنون</button><button class="button" onclick="control('start')">شروع</button><button class="button" onclick="control('stop')">توقف</button><button class="button" onclick="refresh()">تازه‌سازی</button></div><div id="message"></div><p class="meta">کنترل عمومی بسته است. برای دکمه‌های مدیریتی، DASHBOARD_TOKEN را در Render تنظیم کنید؛ کنترل مالک در پنل تلگرام مستقل است.</p></section></div>
+<section class="panel receipt"><div class="panel-head"><h2>رسیدهای واقعی سفارش</h2><span class="meta">فقط filled_amount مثبت؛ شامل شناسه سفارش و معامله</span></div><div class="scroll"><table><thead><tr><th>زمان UTC</th><th>نماد / سمت</th><th>مقدار پُرشده</th><th>قیمت اجرا</th><th>Order ID</th><th>نتیجه</th></tr></thead><tbody id="receipts"></tbody></table></div></section>
+<section class="panel"><div class="panel-head"><h2>شواهد آخرین بررسی هماهنگ</h2><span class="meta" id="build">—</span></div><pre id="evidence" style="padding:18px">—</pre></section>
+<div class="foot">هر استراتژی بودجه و سیگنال مستقل دارد؛ جمع هدف‌ها فقط در لایه سفارش انجام می‌شود. اجرای واقعی تنها با بازار باز، داده تازه، حجم معتبر، کنترل ریسک و سپس تأیید پُرشدن سفارش ثبت می‌شود. تعویض صرافی یا انتقال به پول واقعی خودکار نیست. سبد ۲۵نمادی و اندازه‌گذاری زنده عین پورتفولیوی بک‌تست سه‌نمادی نیستند؛ بازده گذشته قابل تضمین نیست.</div>
+</main><script>
+const esc=v=>String(v==null?'—':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=(v,n=2)=>Number.isFinite(Number(v))&&v!=null?Number(v).toFixed(n):'—';
+let adminToken='';
+const headers=()=>adminToken?{'X-Token':adminToken}:{};
+function setToken(){const t=prompt('DASHBOARD_TOKEN فقط برای همین صفحه (در فایل یا سرور ثبت نمی‌شود):');if(t!==null){adminToken=t;refresh()}}
+const titles={venue_halted:['بازار تست‌نت متوقف است؛ معاملات واقعی مسدودند','صرافی state=halted اعلام می‌کند. ربات سیگنال دارد، اما نمی‌تواند توقف صرافی را باز کند. هر چرخه وضعیت دوباره بررسی می‌شود و بعد از بازشدن، تازه‌بودن داده و ریسک نیز کنترل می‌شود.'],no_open_markets:['هیچ بازار قابل معامله‌ای باز نیست','وضعیت صرافی و خطاهای API در جدول تفکیک شده‌اند؛ پاسخ نامعتبر دیگر توقف بازار فرض نمی‌شود.'],account_unavailable:['حساب قابل خواندن نیست','کلید، مجوز حساب و اتصال صرافی را بررسی کنید. ربات هنگام خطای خواندن حساب یا پوزیشن، پوزیشن را صفر فرض نمی‌کند.'],positions_unavailable:['پوزیشن‌ها قابل تأیید نیستند','برای جلوگیری از سفارش تکراری، مسیر معامله بسته است.'],execution_uncertain:['نتیجه یک سفارش نامشخص است','ابتدا سفارش با برچسب یکتا و پوزیشن واقعی تطبیق داده می‌شود؛ ارسال مجدد کورکورانه ممنوع است.'],drawdown_guard:['محافظ افت سرمایه فعال شده است','افزایش ریسک متوقف است؛ فقط کاهش / بستن reduce-only در بازار باز مجاز است.'],cycle_error:['خطا در چرخه اجرا','شواهد و خطای واقعی را در بخش عملیات ببینید؛ سلامت HTTP به معنای سلامت معامله نیست.'],trading_disabled:['معامله غیرفعال است','TRADING_ENABLED=false؛ فقط سیگنال و عیب‌یابی محاسبه می‌شود.']};
+function side(pa){if(!pa)return '<span class="muted">—</span>';if(pa.reason&&!(pa.side>0))return '<span class="amber" title="'+esc(pa.reason)+'">تاریخچه ناکافی</span>';const label=pa.side>0?'LONG':pa.side<0?'SHORT':'FLAT';return '<span class="'+(pa.side>0?'long':pa.side<0?'short':'muted')+'">'+label+'</span><br><span class="number muted">$'+fmt(pa.notional_usd)+'</span>'}
+function kv(k,v,cls=''){return '<div class="kv"><span class="muted">'+esc(k)+'</span><span class="number '+cls+'">'+esc(v)+'</span></div>'}
+async function refresh(){try{const r=await fetch('/api/status',{headers:headers()});if(!r.ok)throw new Error(r.status===401?'برای مشاهده وضعیت، توکن کنترل را وارد کنید.':'HTTP '+r.status);const d=await r.json();const h=await fetch('/health').then(r=>r.json());const dg=d.diagnostics||{},cfg=d.config||{},risk=d.risk||{},md=d.market_data||{};document.getElementById('engine').textContent=d.running?'● موتور روشن':'موتور متوقف';document.getElementById('engine').className='chip '+(d.running?'live':'red');document.getElementById('updated').textContent='آخرین چرخه: '+(d.last_loop_at||'—');const reason=dg.primary_blocker;const t=titles[reason]||[reason?'مسیر معامله محدود است: '+reason:dg.trading_state==='dry_run'?'حالت شبیه‌سازی؛ معامله واقعی نیست':dg.trading_state==='waiting_for_signal'?'بازار آماده است؛ منتظر سیگنال معتبر':'مسیر معامله بررسی شده است',reason?'جزئیات مانع هر نماد در ماتریس پایین مشخص است.':'ثبت معامله فقط با رسید filled_amount مثبت صرافی انجام می‌شود.'];document.getElementById('reason-title').textContent=t[0];document.getElementById('reason-text').textContent=t[1];document.getElementById('markets').textContent=(dg.market_open_count||0)+' / '+(cfg.assets||[]).length;document.getElementById('halted').textContent=(dg.market_halted_count||0)+' بازار halted';document.getElementById('signals').textContent=dg.active_signal_assets||0;document.getElementById('fills').textContent=dg.confirmed_fill_count||0;document.getElementById('capital').textContent='$'+fmt(cfg.capital_usd,0)+' / $'+fmt(risk.notional_cap_usd,0);document.getElementById('loops').textContent=d.loop_count||0;document.getElementById('ops').textContent=h.last_ops_review_at||'هنوز ثبت نشده';const amap=Object.fromEntries((d.actions||[]).map(a=>[a.asset,a]));const smap=Object.fromEntries((d.sleeves||[]).map(s=>[s.id,s.per_asset||{}]));document.getElementById('matrix').innerHTML=(cfg.assets||[]).map(a=>{const action=amap[a]||{},q=md[a]||{};return '<tr><td class="asset">'+esc(a)+'</td>'+['zenith_apex','almasi_primary','inst_v3_stable','inst_v3_primary','zenith_endurance'].map(s=>'<td>'+side((smap[s]||{})[a])+'</td>').join('')+'<td><span class="number">'+fmt(action.target_amt,6)+'</span><br><span class="number muted">min '+fmt(action.minimum_amount,6)+'</span></td><td class="'+(q.market_state==='open'?'live':'amber')+'">'+esc(q.market_state)+'<br><span class="number muted">'+fmt((q.book_age_seconds||0)/3600,1)+'h old</span></td><td class="note"><b class="'+(action.filled_amount>0?'live':'amber')+'">'+esc(action.status)+'</b><br>'+esc(action.reason)+'</td></tr>'}).join('');document.getElementById('risk').innerHTML=kv('اکسپوژر واقعی فعلی','$'+fmt(risk.current_gross_notional_usd))+kv('سقف اهرم',fmt(cfg.lev_cap)+'×')+kv('افت برآوردشده',(100*(risk.drawdown_pct||0)).toFixed(2)+'%')+kv('آستانه توقف',(100*(risk.drawdown_limit_pct||.15)).toFixed(0)+'%')+kv('حداکثر لغزش مجاز سفارش',fmt(cfg.max_slippage_bps,0)+' bps')+kv('سفارش خروج','reduce-only');document.getElementById('operations').innerHTML=kv('آمادگی واقعی معامله',h.trading_ready?'READY':'NOT READY',h.trading_ready?'live':'amber')+kv('محیط اجرا',dg.execution_environment||'—')+kv('خطای چرخه',d.last_error||'none',d.last_error?'red':'')+kv('آخرین پُرشدن تأییدشده',d.last_fill_at||'—')+kv('سفارش نتیجه‌نامشخص',d.pending_order?'YES':'none');const orders=(d.orders_log||[]).slice(-20).reverse();document.getElementById('receipts').innerHTML=orders.length?orders.map(o=>'<tr><td class="number">'+esc(o.ts)+'</td><td>'+esc(o.asset)+' / '+esc(o.direction)+'</td><td class="number">'+fmt(o.filled_amount,6)+'</td><td class="number">'+fmt(o.price,4)+'</td><td>'+esc(o.order_id)+'</td><td class="live">'+esc(o.status)+'</td></tr>').join(''):'<tr><td colspan="6" class="muted">در دفتر ثبت فعلی، پُرشدن سفارش جدید تأیید نشده است. پوزیشن‌های موجود و شبیه‌سازی، رسید معامله جدید محسوب نمی‌شوند.</td></tr>';document.getElementById('build').textContent='build '+h.build;document.getElementById('evidence').textContent=JSON.stringify({diagnostics:dg,latest_hourly_review:(d.ops_reviews||[]).slice(-1),recent_events:(d.events||[]).slice(-5)},null,2);}catch(e){document.getElementById('reason-title').textContent='وضعیت قابل دریافت نیست';document.getElementById('reason-text').textContent=e.message;}}
+async function control(name){const el=document.getElementById('message');el.textContent='در حال ارسال…';try{const r=await fetch('/api/'+name,{method:'POST',headers:headers()});const x=await r.json();if(!r.ok)throw new Error(x.detail||'HTTP '+r.status);el.textContent='درخواست انجام شد؛ هیچ معامله‌ای خارج از قواعد ریسک تحمیل نشد.';refresh()}catch(e){el.textContent=e.message}}
+refresh();setInterval(refresh,15000);
+</script></body></html>'''

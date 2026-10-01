@@ -186,57 +186,40 @@ class SleeveSpec:
 
 # ── individual independent sleeves ─────────────────────────────────────────
 def sleeve_zenith_apex(frames: Dict[str, pd.DataFrame], capital: float, lev_cap: float = 1.0) -> SleeveResult:
-    """zenith-v001 REBIRTH apex — compress 80% + impulse 20% (internal blend only)."""
-    assets = [a for a in _asset_order(frames) if a in frames]
+    """Two funded legs, NOT a vote that discards impulse-only entries."""
+    assets = _asset_order(frames)
     res = SleeveResult("zenith_apex", "zenith-v001 REBIRTH apex (compress80/impulse20)", capital, 0.0)
     if not assets:
         return res
-    cfg_c = dict(
-        kind="compress", tag="compress_A", pct_lo=0.25, break_n=96, exit_n=48,
-        confirm=2, adx_min=12.0, atr_n=24, pct_n=336,
-        ek=zenith_ek(0.12, cd=8, nf=0.42), assets=assets,
-    )
-    cfg_i = dict(
-        kind="impulse", tag="impulse_B", impulse_atr=2.8, ema_n=48,
-        hold_atr_trail=2.2, max_hold=72, confirm=1, adx_min=16.0, er_min=0.05,
-        ek=zenith_ek(0.12, cd=4, nf=0.40), assets=assets,
-    )
-    sc = zenith_make(cfg_c, frames)
-    si = zenith_make(cfg_i, frames)
-    n_long_guess = 0
-    sides = {}
-    for a in assets:
-        vote = 0.80 * (1.0 if _last_side(sc.get(a)) > 0 else 0.0) + 0.20 * (1.0 if _last_side(si.get(a)) > 0 else 0.0)
-        side = 1.0 if vote >= 0.50 else 0.0
-        sides[a] = side
-        if side > 0:
-            n_long_guess += 1
-    n_long = max(1, n_long_guess)
+    compress_frames = {a: frames[a] for a in assets if len(frames[a]) >= 336}
+    impulse_frames = {a: frames[a] for a in assets if len(frames[a]) >= 168}
+    cfg_c = dict(kind="compress", tag="compress_A", pct_lo=0.25, break_n=96,
+                 exit_n=48, confirm=2, adx_min=12.0, atr_n=24, pct_n=336,
+                 lag=0, assets=list(compress_frames))
+    cfg_i = dict(kind="impulse", tag="impulse_B", impulse_atr=2.8, ema_n=48,
+                 hold_atr_trail=2.2, max_hold=72, confirm=1, adx_min=16.0,
+                 er_min=0.05, lag=0, assets=list(impulse_frames))
+    sc = zenith_make(cfg_c, compress_frames) if compress_frames else {}
+    si = zenith_make(cfg_i, impulse_frames) if impulse_frames else {}
+    cs = {a: 1.0 if _last_side(sc.get(a)) > 0 else 0.0 for a in assets}
+    ins = {a: 1.0 if _last_side(si.get(a)) > 0 else 0.0 for a in assets}
+    nc, ni = max(1, sum(cs.values())), max(1, sum(ins.values()))
     for a in assets:
         px = float(frames[a]["close"].iloc[-1])
-        side = sides[a]
-        ntl = 0.0
-        if side > 0:
-            ntl = min(_vol_notional(frames[a], capital, 0.12, lev_cap), capital / n_long)
-        coin = (ntl / px) if px > 0 else 0.0
+        cap_c, cap_i = capital * 0.80, capital * 0.20
+        nt_c = min(_vol_notional(frames[a], cap_c, 0.12, lev_cap), cap_c * lev_cap / nc) if cs[a] else 0.0
+        nt_i = min(_vol_notional(frames[a], cap_i, 0.12, lev_cap), cap_i * lev_cap / ni) if ins[a] else 0.0
+        notional = nt_c + nt_i
         res.per_asset[a] = dict(
-            side=side,
-            detail={"compress": 1.0 if _last_side(sc.get(a)) > 0 else 0.0,
-                    "impulse": 1.0 if _last_side(si.get(a)) > 0 else 0.0,
-                    "vote": vote if a == assets[-1] else (
-                        0.80 * (1.0 if _last_side(sc.get(a)) > 0 else 0.0) +
-                        0.20 * (1.0 if _last_side(si.get(a)) > 0 else 0.0)
-                    )},
-            price=px,
-            target_coin=coin if side > 0 else 0.0,
-            notional_usd=coin * px if side > 0 else 0.0,
+            side=1.0 if notional > 0 else 0.0,
+            detail={"compress": cs[a], "impulse": ins[a],
+                    "compress_notional": nt_c, "impulse_notional": nt_i,
+                    "weighted_activity": 0.8 * cs[a] + 0.2 * ins[a]},
+            price=px, target_coin=notional/px, notional_usd=notional,
             dt=str(frames[a]["dt"].iloc[-1]),
+            eligibility={"compress": a in compress_frames, "impulse": a in impulse_frames},
         )
-    # fix vote per asset properly
-    for a in assets:
-        v = 0.80 * (1.0 if _last_side(sc.get(a)) > 0 else 0.0) + 0.20 * (1.0 if _last_side(si.get(a)) > 0 else 0.0)
-        res.per_asset[a]["detail"]["vote"] = v
-    res.notes = "independent REBIRTH DNA"
+    res.notes = "independent funded 80/20 legs; confirmed bars; 25-asset live allocation is not a bit-exact historical portfolio"
     return res
 
 
@@ -249,10 +232,10 @@ def sleeve_almasi_primary(frames: Dict[str, pd.DataFrame], capital: float, lev_c
     # TQ on all assets
     tq = {}
     for a in assets:
-        tq[a] = sig_turtle_quality(
+        tq[a] = (sig_turtle_quality(
             frames[a], entry_n=504, exit_n=72, adx_min=18.0, er_min=0.10,
             pullback=False, confirm_bars=2, long_only=True,
-        )
+        ) if len(frames[a]) >= 506 else pd.Series(0.0, index=frames[a].index))
     # VQ on BTC/ETH only
     vq_assets = [a for a in ("BTC", "ETH") if a in frames]
     vq = {}
@@ -278,17 +261,18 @@ def sleeve_almasi_primary(frames: Dict[str, pd.DataFrame], capital: float, lev_c
         coin = 0.0
         detail = {"TQ": tq_sides.get(a, 0.0), "VQ": vq_sides.get(a, 0.0)}
         if tq_sides.get(a, 0) > 0:
-            ntl = min(_vol_notional(frames[a], cap_tq, 0.12, lev_cap), cap_tq / n_tq)
+            ntl = min(_vol_notional(frames[a], cap_tq, 0.12, lev_cap), cap_tq * lev_cap / n_tq)
             coin += ntl / px
         if a in vq_sides and vq_sides[a] > 0:
             # VQ lab used fixed notional_frac ~0.45 of its sleeve with max 2 pos
-            ntl = min(cap_vq * 0.45, cap_vq / n_vq, cap_vq * lev_cap)
+            ntl = min(cap_vq * 0.45, cap_vq * lev_cap / n_vq, cap_vq * lev_cap)
             coin += ntl / px
         side = 1.0 if coin > 0 else 0.0
         res.per_asset[a] = dict(
             side=side, detail=detail, price=px,
             target_coin=coin, notional_usd=coin * px,
             dt=str(frames[a]["dt"].iloc[-1]),
+            eligibility={"TQ": len(frames[a]) >= 506, "VQ": a in vq_assets},
         )
     res.notes = "independent almasi TQ/VQ — not mixed with zenith/iv3"
     return res
@@ -300,28 +284,28 @@ def sleeve_inst_v3_stable(frames: Dict[str, pd.DataFrame], capital: float, lev_c
     assets = [a for a in _asset_order(frames) if a in frames]
     if not assets:
         return res
-    fr = {a: frames[a] for a in assets}
+    fr = {a: frames[a] for a in assets if len(frames[a]) >= 726}
     prim = sig_tsmom_discrete(
         fr, horizons=(24, 168, 720), vote_min=0.67, confirm=5,
-        adx_min=22.0, er_min=0.10, long_only=True, exit_vote=0.20,
+        adx_min=22.0, er_min=0.10, long_only=True, lag=0, exit_vote=0.20,
     )
     broad = sig_tsmom_discrete(
         fr, horizons=(24, 168, 720), vote_min=0.50, confirm=5,
-        adx_min=22.0, er_min=0.08, long_only=True, exit_vote=0.20,
+        adx_min=22.0, er_min=0.08, long_only=True, lag=0, exit_vote=0.20,
     )
     cap_p, cap_b = capital * 0.70, capital * 0.30
-    sp = {a: (1.0 if _last_side(prim[a]) > 0 else 0.0) for a in assets}
-    sb = {a: (1.0 if _last_side(broad[a]) > 0 else 0.0) for a in assets}
+    sp = {a: (1.0 if _last_side(prim.get(a)) > 0 else 0.0) for a in assets}
+    sb = {a: (1.0 if _last_side(broad.get(a)) > 0 else 0.0) for a in assets}
     np_ = max(1, sum(1 for x in sp.values() if x > 0))
     nb_ = max(1, sum(1 for x in sb.values() if x > 0))
     for a in assets:
         px = float(frames[a]["close"].iloc[-1])
         coin = 0.0
         if sp[a] > 0:
-            ntl = min(_vol_notional(frames[a], cap_p, 0.12, lev_cap), cap_p / np_)
+            ntl = min(_vol_notional(frames[a], cap_p, 0.12, lev_cap), cap_p * lev_cap / np_)
             coin += ntl / px
         if sb[a] > 0:
-            ntl = min(_vol_notional(frames[a], cap_b, 0.12, lev_cap), cap_b / nb_)
+            ntl = min(_vol_notional(frames[a], cap_b, 0.12, lev_cap), cap_b * lev_cap / nb_)
             coin += ntl / px
         res.per_asset[a] = dict(
             side=1.0 if coin > 0 else 0.0,
@@ -329,6 +313,10 @@ def sleeve_inst_v3_stable(frames: Dict[str, pd.DataFrame], capital: float, lev_c
             price=px, target_coin=coin, notional_usd=coin * px,
             dt=str(frames[a]["dt"].iloc[-1]),
         )
+    for a in assets:
+        res.per_asset[a]["eligibility"] = {"primary": a in fr, "broad": a in fr}
+        if a not in fr:
+            res.per_asset[a]["reason"] = "insufficient_history: need 726 completed hourly bars"
     res.notes = "independent CTA TSMOM — not mixed with almasi/zenith"
     return res
 
@@ -339,23 +327,27 @@ def sleeve_inst_v3_primary(frames: Dict[str, pd.DataFrame], capital: float, lev_
     assets = [a for a in _asset_order(frames) if a in frames]
     if not assets:
         return res
-    fr = {a: frames[a] for a in assets}
+    fr = {a: frames[a] for a in assets if len(frames[a]) >= 726}
     prim = sig_tsmom_discrete(
         fr, horizons=(24, 168, 720), vote_min=0.67, confirm=5,
-        adx_min=22.0, er_min=0.10, long_only=True, exit_vote=0.20,
+        adx_min=22.0, er_min=0.10, long_only=True, lag=0, exit_vote=0.20,
     )
-    sides = {a: (1.0 if _last_side(prim[a]) > 0 else 0.0) for a in assets}
+    sides = {a: (1.0 if _last_side(prim.get(a)) > 0 else 0.0) for a in assets}
     n_long = max(1, sum(1 for x in sides.values() if x > 0))
     for a in assets:
         px = float(frames[a]["close"].iloc[-1])
         coin = 0.0
         if sides[a] > 0:
-            ntl = min(_vol_notional(frames[a], capital, 0.12, lev_cap), capital / n_long)
+            ntl = min(_vol_notional(frames[a], capital, 0.12, lev_cap), capital * lev_cap / n_long)
             coin = ntl / px
         res.per_asset[a] = dict(
             side=sides[a], detail={"primary": sides[a]}, price=px,
             target_coin=coin, notional_usd=coin * px, dt=str(frames[a]["dt"].iloc[-1]),
         )
+    for a in assets:
+        res.per_asset[a]["eligibility"] = {"primary": a in fr}
+        if a not in fr:
+            res.per_asset[a]["reason"] = "insufficient_history: need 726 completed hourly bars"
     res.notes = "independent primary-only TSMOM"
     return res
 
@@ -369,7 +361,7 @@ def sleeve_zenith_endurance(frames: Dict[str, pd.DataFrame], capital: float, lev
     cfg = dict(
         kind="impulse", tag="impulse_B", impulse_atr=2.8, ema_n=48,
         hold_atr_trail=2.2, max_hold=72, confirm=1, adx_min=16.0, er_min=0.05,
-        ek=zenith_ek(0.12, cd=4, nf=0.40), assets=assets,
+        ek=zenith_ek(0.12, cd=4, nf=0.40), assets=assets, lag=0,
     )
     sig = zenith_make(cfg, frames)
     sides = {a: (1.0 if _last_side(sig.get(a)) > 0 else 0.0) for a in assets}
@@ -378,7 +370,7 @@ def sleeve_zenith_endurance(frames: Dict[str, pd.DataFrame], capital: float, lev
         px = float(frames[a]["close"].iloc[-1])
         coin = 0.0
         if sides[a] > 0:
-            ntl = min(_vol_notional(frames[a], capital, 0.12, lev_cap), capital / n_long)
+            ntl = min(_vol_notional(frames[a], capital, 0.12, lev_cap), capital * lev_cap / n_long)
             coin = ntl / px
         res.per_asset[a] = dict(
             side=sides[a], detail={"impulse": sides[a]}, price=px,

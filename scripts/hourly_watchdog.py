@@ -1,94 +1,136 @@
 #!/usr/bin/env python3
-"""Hourly health check + optional auto-tick. Run via cron or keep alive with UptimeRobot + this on a worker."""
+"""Hourly liveness AND trading-readiness review. Never rewrites code or forces trades.
+
+Runs locally or in GitHub Actions. Optional recovery requires DASHBOARD_TOKEN and
+WATCHDOG_RECOVERY=true. The API itself rejects overlapping ticks and public control.
+"""
 from __future__ import annotations
-import json, os, sys, time
+
+import html
+import json
+import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 URL = os.getenv("BOT_URL", "https://zenith-trader-bot.onrender.com").rstrip("/")
+TOKEN = os.getenv("DASHBOARD_TOKEN", "")
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID", "")
+RECOVERY = os.getenv("WATCHDOG_RECOVERY", "false").lower() == "true"
 OUT = Path(os.getenv("WATCHDOG_LOG", str(ROOT / "state" / "watchdog.log")))
-OUT.parent.mkdir(parents=True, exist_ok=True)
 
-def log(msg: str):
-    line = f"{datetime.now(timezone.utc).isoformat()} {msg}"
+
+def log(message: str):
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    line = f"{datetime.now(timezone.utc).isoformat()} {message}"
     print(line)
-    with OUT.open("a") as f:
-        f.write(line + "\n")
+    with OUT.open("a") as file:
+        file.write(line + "\n")
 
-def tg(text: str):
+
+def notify(message: str):
     if not TG_TOKEN or not TG_CHAT:
         return
     try:
-        httpx.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            data={"chat_id": TG_CHAT, "text": text[:3500], "parse_mode": "HTML"},
-            timeout=30,
-        )
-    except Exception as e:
-        log(f"tg fail {e}")
+        response = httpx.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                              data={"chat_id": TG_CHAT, "text": html.escape(message[:3400]), "parse_mode": "HTML"}, timeout=20)
+        if response.status_code != 200:
+            log(f"notification failed HTTP={response.status_code}")
+    except Exception as exc:
+        log(f"notification unavailable: {type(exc).__name__}")
+
 
 def main():
-    issues = []
-    try:
-        h = httpx.get(f"{URL}/health", timeout=60).json()
-    except Exception as e:
-        issues.append(f"health unreachable: {e}")
-        tg(f"🚨 watchdog: health unreachable\n{e}")
-        log(str(issues))
-        return 2
-    if not h.get("ok"):
-        issues.append(f"health not ok: {h}")
-    if not h.get("running"):
-        issues.append("engine not running")
+    headers = {"X-Token": TOKEN} if TOKEN else {}
+    issues, recovery_notes = [], []
+    health, status = {}, {}
+    with httpx.Client(timeout=45, headers=headers, follow_redirects=True) as client:
         try:
-            httpx.post(f"{URL}/api/start", timeout=30)
-            issues.append("sent /api/start")
-        except Exception as e:
-            issues.append(f"start failed: {e}")
-    # stale loop?
-    last = h.get("last_loop_at")
-    if last:
+            response = client.get(URL+"/health")
+            response.raise_for_status()
+            health = response.json()
+        except Exception as exc:
+            message = f"service unreachable: {type(exc).__name__}"
+            log("ERROR "+message);notify("Watchdog: "+message)
+            return 2
+        if not health.get("ok"):
+            issues.append("service liveness not OK")
+        if not health.get("running"):
+            issues.append("engine not running")
+            if TOKEN and RECOVERY:
+                try:
+                    response = client.post(URL+"/api/start");response.raise_for_status()
+                    recovery_notes.append("authorized start requested")
+                except Exception as exc:
+                    recovery_notes.append("start failed: "+type(exc).__name__)
+        age = health.get("loop_age_seconds")
+        if age is None and health.get("last_loop_at"):
+            age = (datetime.now(timezone.utc)-datetime.fromisoformat(health["last_loop_at"].replace("Z", "+00:00"))).total_seconds()
+        if age is not None and age > 900:
+            issues.append(f"stale completed cycle age={age:.0f}s")
+            if TOKEN and RECOVERY and not health.get("cycle_in_progress"):
+                try:
+                    response = client.post(URL+"/api/tick", timeout=90);response.raise_for_status()
+                    recovery_notes.append("authorized non-overlapping tick requested")
+                except Exception as exc:
+                    recovery_notes.append("tick unavailable: "+type(exc).__name__)
         try:
-            ts = datetime.fromisoformat(last.replace("Z", "+00:00"))
-            age = (datetime.now(timezone.utc) - ts).total_seconds()
-            if age > 15 * 60:
-                issues.append(f"stale loop age={age:.0f}s — forcing tick")
-                httpx.post(f"{URL}/api/tick", timeout=300)
-        except Exception as e:
-            issues.append(f"parse last_loop: {e}")
-    # status deep
-    try:
-        st = httpx.get(f"{URL}/api/status", timeout=90).json()
-        acts = st.get("actions") or []
-        n_err = sum(1 for a in acts if (a.get("status") or "").lower() in ("error", "failed"))
-        n_halt = sum(1 for a in acts if str(a.get("status") or "").startswith("market_"))
-        n_assets = len((st.get("config") or {}).get("assets") or [])
-        log(f"ok loops={st.get('loop_count')} assets={n_assets} act_err={n_err} halt={n_halt} last_err={st.get('last_error')}")
-        if n_err > 0 and n_halt == 0:
-            # real order errors while markets open
-            sample = [a for a in acts if (a.get("status") or "").lower() in ("error", "failed")][:5]
-            tg(
-                "⚠️ watchdog: order errors\n"
-                + "\n".join(f"{a.get('asset')}: {str(a.get('error'))[:120]}" for a in sample)
-            )
-        elif n_halt >= max(1, n_assets // 2):
-            log("venue markets mostly halted — expected on testnet maintenance")
-        if st.get("last_error"):
-            issues.append(f"last_error={st.get('last_error')}")
-    except Exception as e:
-        issues.append(f"status fail: {e}")
+            response = client.get(URL+"/api/status")
+            if response.status_code == 401 and not TOKEN:
+                recovery_notes.append("deep status protected; reviewed public health only")
+            else:
+                response.raise_for_status();status = response.json()
+        except Exception as exc:
+            issues.append("status unavailable: "+type(exc).__name__)
+    actions = status.get("actions") or []
+    diagnostics = status.get("diagnostics") or dict(health)
+    if status and not status.get("diagnostics"):
+        # Legacy deployment: derive evidence rather than pretending it is idle/ready.
+        halted = sum(a.get("status") == "market_halted" for a in actions)
+        opened = sum(a.get("market_state") == "open" for a in actions)
+        n_assets = len((status.get("config") or {}).get("assets") or [])
+        active = sum(abs(float(b.get("target_coin") or 0)) > 0 for b in (status.get("net_book") or {}).values())
+        diagnostics.update(trading_ready=False, trading_state="blocked", market_halted_count=halted,
+                           market_open_count=opened, active_signal_assets=active,
+                           primary_blocker="venue_halted" if halted == n_assets and n_assets else "legacy_readiness_schema")
+    primary = diagnostics.get("primary_blocker")
+    order_errors = [a for a in actions if a.get("status") in ("error", "failed", "execution_uncertain", "execution_validation_error", "order_error_backoff")]
+    # A halted asset must never suppress genuine errors in another open asset.
+    if order_errors:
+        issues.append(f"execution problems={len(order_errors)}")
+    if health.get("last_error"):
+        issues.append("cycle error: "+str(health["last_error"]))
+    severe = {"cycle_error", "account_unavailable", "positions_unavailable", "execution_uncertain", "strategy_error",
+              "error", "order_error_backoff", "execution_validation_error", "mainnet_not_authorized", "market_api_error"}
+    if primary in severe and not order_errors and not health.get("last_error"):
+        issues.append("trading blocker: "+str(primary))
+    review = {
+        "checked_at": datetime.now(timezone.utc).isoformat(), "build": health.get("build"),
+        "service_running": health.get("running"), "loops": health.get("loop_count"),
+        "trading_ready": diagnostics.get("trading_ready", False),
+        "trading_state": diagnostics.get("trading_state"), "primary_blocker": primary,
+        "markets_open": diagnostics.get("market_open_count", 0),
+        "markets_halted": diagnostics.get("market_halted_count", 0),
+        "active_signal_assets": diagnostics.get("active_signal_assets", 0),
+        "confirmed_fills": diagnostics.get("confirmed_fill_count", 0),
+        "issues": issues, "recovery_notes": recovery_notes,
+    }
+    state = "ERROR" if issues else "BLOCKED" if primary else "READY" if review["trading_ready"] else "IDLE"
+    log(state+" "+json.dumps(review, ensure_ascii=False))
+    summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path,"a") as file:
+            file.write(f"## Hourly bot review: {state}\n\n```json\n{json.dumps(review,ensure_ascii=False,indent=2)}\n```\n")
+            file.write("\nLiveness OK does not mean trading ready. Exchange halts cannot be cleared by the bot.\n")
     if issues:
-        log("ISSUES " + " | ".join(issues))
-        # only TG if not pure halt
-        if not any("halt" in x.lower() for x in issues):
-            tg("🛠️ watchdog issues:\n" + "\n".join(issues)[:3000])
-    else:
-        log("healthy")
-    return 0
+        notify("Watchdog needs attention:\n"+"\n".join(issues)[:3000])
+    # Exchange halt is advisory, NOT a successful trading state and NOT a restart cause.
+    return 2 if issues else 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -30,7 +30,7 @@ services:
       - key: LOOP_SECONDS
         value: "90"
       - key: MAX_NOTIONAL_USD
-        value: "500"
+        value: "100"
       - key: MIN_NOTIONAL_USD
         value: "10"
       - key: CANDLE_LOOKBACK_HOURS
@@ -39,6 +39,22 @@ services:
         value: "true"
       - key: TELEGRAM_FULL_REPORT_HOURS
         value: "6"
+      - key: REBALANCE_NOTIONAL_USD
+        value: "1"
+      - key: MARKET_DATA_MAX_AGE_SECONDS
+        value: "180"
+      - key: MAX_SPREAD_BPS
+        value: "100"
+      - key: MAX_SLIPPAGE_BPS
+        value: "50"
+      - key: MAX_DRAWDOWN_PCT
+        value: "0.15"
+      - key: OPS_REVIEW_SECONDS
+        value: "3600"
+      - key: ALLOW_MAINNET_TRADING
+        value: "false"
+      - key: DASHBOARD_TOKEN
+        sync: false
       - key: DERIBIT_CLIENT_ID
         sync: false
       - key: DERIBIT_CLIENT_SECRET
