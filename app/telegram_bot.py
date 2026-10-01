@@ -270,41 +270,39 @@ class TelegramReporter:
 
     # ── Glass keyboard ────────────────────────────────────────────────────
     def main_keyboard(self) -> dict:
-        return {
-            "inline_keyboard": [
-                [
-                    {"text": "📊 وضعیت", "callback_data": "panel:status"},
-                    {"text": "💼 پوزیشن", "callback_data": "panel:positions"},
-                    {"text": "💰 موجودی", "callback_data": "panel:balance"},
-                ],
-                [
-                    {"text": "🧩 آستین‌ها", "callback_data": "panel:sleeves"},
-                    {"text": "📈 آمار", "callback_data": "panel:stats"},
-                    {"text": "🧾 معاملات", "callback_data": "panel:trades"},
-                ],
-                [
-                    {"text": "⚡ Tick", "callback_data": "panel:tick"},
-                    {"text": "📄 گزارش فایل", "callback_data": "panel:file"},
-                    {"text": "❤️ Health", "callback_data": "panel:health"},
-                ],
-                [
-                    {"text": "🧪 تست ۶۰ثانیه", "callback_data": "panel:testtrade"},
-                    {"text": "⏱ وضعیت تست", "callback_data": "panel:teststatus"},
-                    {"text": "🛑 بستن تست", "callback_data": "panel:testclose"},
-                ],
-                [
-                    {"text": "▶️ Start", "callback_data": "panel:start"},
-                    {"text": "⏹ Stop", "callback_data": "panel:stop"},
-                    {"text": "🔄 پنل", "callback_data": "panel:home"},
-                ],
-                ([{"text": "🌐 داشبورد وب", "url": self.dashboard_url}] if self.dashboard_url else [])[0] if self.dashboard_url else [],
-            ]
-        }
+        keyboard = [
+            [
+                {"text": "📊 وضعیت", "callback_data": "panel:status"},
+                {"text": "💼 پوزیشن", "callback_data": "panel:positions"},
+                {"text": "💰 موجودی", "callback_data": "panel:balance"},
+            ],
+            [
+                {"text": "🧩 آستین‌ها", "callback_data": "panel:sleeves"},
+                {"text": "📈 آمار", "callback_data": "panel:stats"},
+                {"text": "🧾 معاملات", "callback_data": "panel:trades"},
+            ],
+            [
+                {"text": "⚡ Tick", "callback_data": "panel:tick"},
+                {"text": "📄 گزارش فایل", "callback_data": "panel:file"},
+                {"text": "❤️ Health", "callback_data": "panel:health"},
+            ],
+            [
+                {"text": "🧪 تست ۶۰ثانیه", "callback_data": "panel:testtrade"},
+                {"text": "⏱ وضعیت تست", "callback_data": "panel:teststatus"},
+                {"text": "🛑 بستن تست", "callback_data": "panel:testclose"},
+            ],
+            [
+                {"text": "▶️ Start", "callback_data": "panel:start"},
+                {"text": "⏹ Stop", "callback_data": "panel:stop"},
+                {"text": "🔄 پنل", "callback_data": "panel:home"},
+            ],
+        ]
+        if self.dashboard_url:
+            keyboard.append([{"text": "🌐 داشبورد وب", "url": self.dashboard_url}])
+        return {"inline_keyboard": keyboard}
 
     def _kb(self) -> dict:
-        kb = self.main_keyboard()
-        kb["inline_keyboard"] = [row for row in kb["inline_keyboard"] if row]
-        return kb
+        return self.main_keyboard()
 
     def send_panel(self, text: Optional[str] = None) -> None:
         if text is None:
