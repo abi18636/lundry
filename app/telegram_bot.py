@@ -691,11 +691,23 @@ class TelegramReporter:
         return "\n".join(lines)
 
     def format_positions(self, snap: dict) -> str:
-        pos = snap.get("positions") or []
+        raw_pos = snap.get("positions") or []
+        # Filter out zero-size positions that Deribit returns with direction=zero — these are closed, not open
+        pos = []
+        for p in raw_pos:
+            try:
+                sz = float(p.get("size_currency") or p.get("size") or 0)
+                if abs(sz) > 1e-12:
+                    pos.append(p)
+            except Exception:
+                pos.append(p)
         fin = snap.get("financial") or {}
-        lines = [f"💼 <b>پوزیشن‌ها ({len(pos)})</b>", f"🕐 {utcnow()}", ""]
+        lines = [f"💼 <b>پوزیشن‌ها ({len(pos)}) — فیلترشده بدون صفر (خام {len(raw_pos)})</b>", f"🕐 {utcnow()}", ""]
         if not pos:
-            lines.append("flat — بدون پوزیشن")
+            lines.append("flat — بدون پوزیشن (همه صفر)")
+            # Show zero ones for debug
+            if raw_pos:
+                lines.append(f"خام از صرافی {len(raw_pos)} مورد با سایز صفر بود که فیلتر شد")
             return "\n".join(lines)
         total_pnl = 0.0
         for p in pos:
@@ -712,6 +724,9 @@ class TelegramReporter:
         lines.append(f"\nΣ pnl ≈ <b>{total_pnl:.4f}</b>")
         if fin.get("unrealized_gross_usdc") is not None:
             lines.append(f"غیرمحقق حساب‌شده: ${ _f(fin.get('unrealized_gross_usdc'))}")
+        # Debug: show if any zero filtered
+        if len(raw_pos) != len(pos):
+            lines.append(f"\nℹ️ {len(raw_pos)-len(pos)} پوزیشن با سایز صفر از صرافی آمد و فیلتر شد (مثل BTC/LTC/TRX با direction=zero) — اینها در بروکر هم باز نشان داده نمی‌شوند")
         return "\n".join(lines)
 
     def format_sleeves(self, snap: dict) -> str:
