@@ -131,3 +131,9 @@ def test_duplicate_cycle_error_not_spammed(monkeypatch):
     r.on_cycle({},error='same failure');r.on_cycle({},error='same failure')
     assert len(sent)==1
     r._http.close()
+
+
+@pytest.mark.parametrize('url',['https://example.invalid/api/v2','http://test.deribit.com/api/v2','https://test.deribit.com/api/v2?secret=bad'])
+def test_settings_refuse_untrusted_credential_destinations(url):
+    from app.config import Settings
+    with pytest.raises(ValueError):Settings(_env_file=None,deribit_base_url=url)

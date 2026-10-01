@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import Dict, List
+from urllib.parse import urlparse
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -62,6 +63,17 @@ class Settings(BaseSettings):
     telegram_full_report_hours: float = 6.0
     telegram_trade_only: bool = True
     max_assets_parallel_candles: int = 5
+
+    @field_validator("deribit_base_url")
+    @classmethod
+    def trusted_exchange_url(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        parsed = urlparse(value)
+        if (parsed.scheme != "https" or parsed.hostname not in {"test.deribit.com", "www.deribit.com", "deribit.com"}
+                or parsed.path != "/api/v2" or parsed.query or parsed.fragment or parsed.username
+                or parsed.port not in (None, 443)):
+            raise ValueError("DERIBIT_BASE_URL must be an official HTTPS Deribit /api/v2 endpoint")
+        return value
 
     @property
     def asset_list(self) -> List[str]:

@@ -292,6 +292,13 @@ class TradingEngine:
     def _once_unlocked(self) -> dict:
         s = self.settings
         self.state.mode = "running"
+        if self._environment() != "testnet-live" and not s.allow_mainnet_trading:
+            # Do not even send testnet credentials to production when execution is not authorized.
+            blocked_actions = [{"asset": a, "instrument": s.instrument_for(a), "status": "safety_blocked",
+                                "reason": "mainnet_not_authorized", "can_execute": False, "market_state": "unknown"}
+                               for a in s.asset_list]
+            return self._finish(blocked_actions, {a: {"market_state": "unknown"} for a in s.asset_list},
+                                ["mainnet_not_authorized"])
         c = self._ensure_client()
         fatal = []
         if not s.use_usdc_linear:
@@ -414,6 +421,18 @@ class TradingEngine:
                       "notional_usd": abs(desired)*px, "contributors": b.get("contributors") or {},
                       "price": px, "market_state": state, "book_age_seconds": age,
                       "can_execute": False, "status": "pending_check", "reason": ""}
+            action["minimum_amount"] = meta.get("min_trade_amount") or meta.get("contract_size")
+            action["contract_size"] = meta.get("contract_size")
+            # Hypothetical lot feasibility is observable even while the venue is halted;
+            # it is not an order, not an acknowledgement and never a reported fill.
+            try:
+                draft = plan_rebalance(current, desired, px, float(meta.get("contract_size") or 0),
+                                       float(meta.get("min_trade_amount") or meta.get("contract_size") or 0),
+                                       s.rebalance_notional_usd)
+                action.update(planned_target_amt=draft.target, preflight_status=draft.status,
+                              preflight_intent=draft.intent, preflight_amount=draft.amount)
+            except (ValueError, TypeError):
+                action["preflight_status"] = "not_validated"
             actions.append(action)
             def block(status, reason):
                 action.update(status=status, reason=reason)

@@ -286,3 +286,17 @@ def test_orders_outside_universe_reserve_gross_budget(make_engine):
     e,v,_=make_engine();v.existing_orders=[{'instrument_name':'ETH_USDC-PERPETUAL','amount':1,'filled_amount':0,'price':100,'reduce_only':False}]
     out=e.once()
     assert not v.calls and out['actions'][0]['status']=='risk_cap_blocked'
+
+
+def test_blocked_mainnet_never_sends_testnet_authentication(make_engine):
+    e,v,_=make_engine(deribit_base_url='https://www.deribit.com/api/v2')
+    v.account_summary=lambda cur:pytest.fail('must not send private credentials to mainnet')
+    assert e.once()['diagnostics']['primary_blocker']=='mainnet_not_authorized'
+
+
+def test_halted_market_still_displays_minimum_lot_and_draft(make_engine):
+    e,v,_=make_engine({'BTC':.02});v.state='halted'
+    a=e.once()['actions'][0]
+    assert a['status']=='market_halted' and a['minimum_amount']==.1
+    assert a['planned_target_amt']==0 and a['preflight_status']=='below_exchange_minimum'
+    assert not v.calls

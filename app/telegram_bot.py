@@ -569,7 +569,7 @@ class TelegramReporter:
         msg = (
             f"🚀 <b>SUPER BOT ONLINE</b>\n"
             f"🕐 {utcnow()}\n"
-            f"pairs: <b>{len(assets)}</b> · sleeves: <b>{len(snap.get('sleeves') or [])}</b>\n"
+            f"pairs: <b>{len(assets)}</b> · sleeves: <b>{len(cfg.get('sleeves_enabled') or [])}</b>\n"
             f"capital ${_esc(cfg.get('capital_usd'))} · dry={_esc(cfg.get('dry_run'))}\n"
             f"trade_alerts=only · full_file_report every {self.full_report_hours:g}h\n"
             f"Web: {_esc(self.dashboard_url)}"
