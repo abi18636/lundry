@@ -52,7 +52,7 @@ See `TIMED_TEST_TRADE_FA.md`. Telegram `/panel` → test → owner confirmation,
 the web test button with `DASHBOARD_TOKEN`. Without that token the web button
 opens Telegram owner confirmation, not an unauthenticated trading endpoint.
 
-Minimum valid ETH lot, testnet only, maximum $5 notional. Normal strategy orders
+Minimum valid BTC lot, testnet only, maximum $10 notional. Normal strategy orders
 are paused during the test. A separate timer attempts a reduce-only exit 60 seconds
 after confirmed entry fill. Exchange/network/host outages can delay execution; the
 UI never treats countdown expiry as proof of a fill. Unique labels allow restart

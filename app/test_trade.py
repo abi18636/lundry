@@ -49,6 +49,7 @@ class TimedTestTrade:
         self.recovery_in_progress = False
         self._last_warning = 0.0
         self._last_warning_code = ""
+        self._recovery_retry_at = 0.0
 
     @property
     def state(self):
@@ -429,24 +430,33 @@ class TimedTestTrade:
         finally:
             self.engine._cycle_lock.release()
 
+    def _recovery_complete(self):
+        self.recovery_in_progress = False
+        self._recovery_retry_at = 0.0
+        if self.state.get("warning_code") == "recovery_check":
+            self._set(warning_code=None, warning=None, recovery_error=None,
+                      status="idle" if self.state.get("status") in ("idle", "recovery_blocked") else self.state.get("status"))
+        self.engine.request_cycle()
+
     def recover_on_boot(self):
+        if self.clock() < self._recovery_retry_at:
+            return
         if not self.engine._cycle_lock.acquire(blocking=False):
             return
         try:
             if self.is_active():
                 # State retained: continue the old deadline, NEVER open another test.
-                self.recovery_in_progress = False
                 self._set(next_check_at=self.clock(), recovered=True)
-                self.engine.request_cycle()
+                self._recovery_complete()
                 return
             s = self.engine.settings
             if not s.test_trade_enabled or urlparse(s.deribit_base_url).hostname != "test.deribit.com":
-                self.recovery_in_progress = False; self.engine.request_cycle(); return
+                self._recovery_complete(); return
             c = self.engine._ensure_client()
             instrument = s.instrument_for(s.test_trade_asset)
             positions = self._positions(c)
             if self._quantity(positions, instrument) <= 0:
-                self.recovery_in_progress = False; self.engine.request_cycle(); return
+                self._recovery_complete(); return
             orders = c.recent_orders(instrument)
             if not any(re.fullmatch(ENTRY_PREFIX+r"[0-9a-f]{16}", str(o.get("label") or "")) for o in orders):
                 orders += c.recent_orders(instrument, historical=True)
@@ -496,10 +506,12 @@ class TimedTestTrade:
                               "sent_at": self.clock(), "requested_amount": entry.get("amount"),
                               "before_exit_filled": 0})
                 self.engine._save(); self._notify("recovered")
-            self.recovery_in_progress = False
-            self.engine.request_cycle()
+            self._recovery_complete()
         except Exception as exc:
-            self._warn("recovery_check", "بازیابی مالکیت تست هنوز تأیید نشده؛ سفارش‌های عادی موقتاً متوقف‌اند.")
+            self._recovery_retry_at = self.clock()+30
+            self._set(status="recovery_blocked", recovery_error=str(exc), recovery_retry_at=iso(self._recovery_retry_at))
+            self._warn("recovery_check", "مالکیت تست روی نماد منتخب هنوز تأیید نشده؛ فقط همان نماد موقتاً مسدود است.")
+            self.engine.request_cycle()
         finally:
             self.engine._cycle_lock.release()
 

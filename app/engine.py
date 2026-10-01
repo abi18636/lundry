@@ -334,7 +334,7 @@ class TradingEngine:
                 "diagnostics": self.state.diagnostics, "test_trade": self.test_trader.snapshot()}
 
     def _once_unlocked(self) -> dict:
-        if self.test_trader.is_active() or self.test_trader.recovery_in_progress:
+        if self.test_trader.is_active():
             return self._paused_test_cycle()
         s = self.settings
         self.state.mode = "running"
@@ -482,7 +482,9 @@ class TradingEngine:
             actions.append(action)
             def block(status, reason):
                 action.update(status=status, reason=reason)
-            if not meta:
+            if self.test_trader.recovery_in_progress and a == s.test_trade_asset.upper():
+                block("test_recovery_pending", "Only this instrument is reserved until old test ownership is reconciled")
+            elif not meta:
                 block("instrument_unavailable", "Instrument metadata failed; not a market halt")
             elif meta.get("instrument_type") != "linear" or meta.get("settlement_currency") != "USDC":
                 block("unsupported_instrument", "Only USDC linear perpetuals are authorized")

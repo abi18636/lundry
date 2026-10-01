@@ -168,10 +168,15 @@ class DeribitClient:
         return self._private("get_order_state_by_label", {"currency": "USDC", "label": label}) or []
 
     def recent_orders(self, instrument: str, historical: bool = False) -> List[dict]:
-        return self._private("get_order_history_by_instrument", {
-            "instrument_name": instrument, "count": 100,
+        result = self._private("get_order_history_by_instrument", {
+            "instrument_name": instrument, "count": 100, "with_continuation": False,
             "include_unfilled": True, "historical": bool(historical),
-        }) or []
+        })
+        if isinstance(result, dict):
+            result = result.get("orders")
+        if not isinstance(result, list) or any(not isinstance(order, dict) for order in result):
+            raise DeribitAPIError("private/get_order_history_by_instrument", "protocol", "unexpected order-history shape")
+        return result
 
     def cancel_order(self, order_id: str) -> dict:
         return self._private("cancel", {"order_id": order_id}) or {}

@@ -34,7 +34,7 @@ class DemoVenue:
         self.private_reads+=1
         if self.positions_failure:raise RuntimeError('position read failed')
         return [{'instrument_name':a+'_USDC-PERPETUAL','size_currency':abs(q),'direction':'buy' if q>0 else 'sell',
-                 'mark_price':2700. if a=='ETH' else 80000.} for a,q in self.quantities.items() if q]
+                 'mark_price':{'ETH':2700.,'BTC':80000.,'TRX':.334}.get(a,100.)} for a,q in self.quantities.items() if q]
     def account_summary(self,currency):
         self.private_reads+=1
         return {'equity':self.equity,'balance':self.equity,'available_funds':self.available}
@@ -67,7 +67,7 @@ def demo(tmp_path,monkeypatch):
     monkeypatch.setattr(engine_module,'get_reporter',lambda:None)
     clock=Clock()
     settings=Settings(_env_file=None,deribit_client_id='MOCK_ID',deribit_client_secret='MOCK_SECRET',
-                      assets='BTC,ETH',state_path=str(tmp_path/'state.json'))
+                      assets='BTC,ETH',test_trade_asset='ETH',test_trade_max_notional_usd=5,state_path=str(tmp_path/'state.json'))
     engine=TradingEngine(settings);venue=DemoVenue(clock);engine.client=venue
     engine.test_trader=TimedTestTrade(engine,clock)
     return engine,venue,clock
@@ -193,7 +193,7 @@ def test_external_manual_close_is_not_fabricated_as_timer_fill(demo):
 def test_lost_local_state_is_recovered_from_exchange_labels(demo,tmp_path):
     e,v,c=demo;e.test_trader.start(background=False)
     e2=TradingEngine(Settings(_env_file=None,deribit_client_id='MOCK_ID',deribit_client_secret='MOCK_SECRET',
-                             assets='BTC,ETH',state_path=str(tmp_path/'new-instance.json')))
+                             assets='BTC,ETH',test_trade_asset='ETH',test_trade_max_notional_usd=5,state_path=str(tmp_path/'new-instance.json')))
     e2.client=v;e2.test_trader=TimedTestTrade(e2,c);e2.test_trader.recovery_in_progress=True
     c.advance(60);e2.test_trader.recover_on_boot()
     assert e2.test_trader.is_active() and e2.test_trader.state['recovered'] and len(v.calls)==1
@@ -253,7 +253,7 @@ def test_keyboard_exposes_test_start_status_and_close(demo):
 def test_actual_60_second_worker_not_90_second_strategy_loop(tmp_path,monkeypatch):
     monkeypatch.setattr(engine_module,'get_reporter',lambda:None)
     e=TradingEngine(Settings(_env_file=None,deribit_client_id='MOCK_ID',deribit_client_secret='MOCK_SECRET',
-                             assets='BTC,ETH',loop_seconds=90,state_path=str(tmp_path/'live-timer.json')))
+                             assets='BTC,ETH',test_trade_asset='ETH',test_trade_max_notional_usd=5,loop_seconds=90,state_path=str(tmp_path/'live-timer.json')))
     v=DemoVenue(time.time);e.client=v
     start=time.monotonic();e.test_trader.start(background=True)
     assert e.test_trader.closed_event.wait(70),'60-second close did not complete'
@@ -261,3 +261,42 @@ def test_actual_60_second_worker_not_90_second_strategy_loop(tmp_path,monkeypatc
     e.test_trader.shutdown()
     assert 59<=elapsed<=65 and e.test_trader.state['status']=='closed'
     assert len(v.calls)==2 and v.calls[1]['reduce_only']
+
+
+def test_btc_minimum_lot_preserves_existing_eth_and_trx(demo):
+    e,v,c=demo;e.settings.test_trade_asset='BTC';e.settings.test_trade_max_notional_usd=10
+    v.quantities={'ETH':.0015,'TRX':19}
+    v.order_book=lambda inst,depth=5:{'state':'open','timestamp':int(c()*1000),'bids':[[83500.,10]],'asks':[[83700.,10]],'mark_price':83600.}
+    e.test_trader.start(background=False);c.advance(60);e.test_trader.step()
+    assert e.test_trader.state['status']=='closed'
+    assert v.quantities['ETH']==.0015 and v.quantities['TRX']==19
+    assert all(call['instrument']=='BTC_USDC-PERPETUAL' for call in v.calls)
+    assert v.calls[0]['amount']*v.calls[0]['price']<10
+
+
+@pytest.mark.parametrize('shape', [[{'order_id':'o-1','label':'ordinary'}], {'orders':[{'order_id':'o-1','label':'ordinary'}],'continuation':None}])
+def test_order_history_normalizes_gateway_shapes(shape):
+    from app.deribit import DeribitClient
+    client=DeribitClient('https://test.deribit.com/api/v2','MOCK_ID','MOCK_SECRET')
+    client._private=lambda method,params:shape
+    assert client.recent_orders('BTC_USDC-PERPETUAL')==[{'order_id':'o-1','label':'ordinary'}]
+    client.close()
+
+
+def test_history_failure_is_backed_off_and_does_not_globally_pause_strategy_cycle(demo,monkeypatch):
+    import numpy as np
+    import pandas as pd
+    e,v,c=demo;v.quantities={'ETH':.0003};calls=[]
+    def fail_history(*args,**kwargs):
+        calls.append(1);raise DeribitAPIError('private/get_order_history_by_instrument','protocol','unavailable')
+    v.recent_orders=fail_history
+    def candles(inst,**kwargs):
+        n=800;d=pd.date_range(end=pd.Timestamp(c(),unit='s',tz='UTC').floor('h')-pd.Timedelta(hours=1),periods=n,freq='h')
+        return pd.DataFrame({'dt':d,'open':100.,'high':101.,'low':99.,'close':100.,'volume':1.})
+    v.candles=candles;e.test_trader.recovery_in_progress=True
+    e.test_trader.recover_on_boot();e.test_trader.recover_on_boot()
+    assert len(calls)==1 and e.test_trader.state['recovery_error']
+    output=e.once()
+    assert e.state.mode=='running' and len(e.state.sleeves)==5
+    assert next(a for a in output['actions'] if a['asset']=='ETH')['status']=='test_recovery_pending'
+    assert next(a for a in output['actions'] if a['asset']=='BTC')['status']!='test_trade_paused'
