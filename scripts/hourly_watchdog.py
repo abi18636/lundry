@@ -103,6 +103,11 @@ def main():
     # A halted asset must never suppress genuine errors in another open asset.
     if order_errors:
         issues.append(f"execution problems={len(order_errors)}")
+    timed_test = health.get("test_trade") or {}
+    if timed_test.get("active") and float(timed_test.get("overdue_seconds") or 0) > 15:
+        issues.append("timed test exit overdue; inspect confirmed fills, do not start a second test")
+    if timed_test.get("active") and timed_test.get("status") in ("entry_uncertain", "exit_uncertain"):
+        issues.append("timed test order outcome unconfirmed")
     if health.get("last_error"):
         issues.append("cycle error: "+str(health["last_error"]))
     severe = {"cycle_error", "account_unavailable", "positions_unavailable", "execution_uncertain", "strategy_error",

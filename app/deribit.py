@@ -167,6 +167,12 @@ class DeribitClient:
     def orders_by_label(self, label: str) -> List[dict]:
         return self._private("get_order_state_by_label", {"currency": "USDC", "label": label}) or []
 
+    def recent_orders(self, instrument: str, historical: bool = False) -> List[dict]:
+        return self._private("get_order_history_by_instrument", {
+            "instrument_name": instrument, "count": 100,
+            "include_unfilled": True, "historical": bool(historical),
+        }) or []
+
     def cancel_order(self, order_id: str) -> dict:
         return self._private("cancel", {"order_id": order_id}) or {}
 

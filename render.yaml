@@ -55,6 +55,16 @@ services:
         value: "false"
       - key: DASHBOARD_TOKEN
         sync: false
+      - key: TEST_TRADE_ENABLED
+        value: "true"
+      - key: TEST_TRADE_ASSET
+        value: "ETH"
+      - key: TEST_TRADE_HOLD_SECONDS
+        value: "60"
+      - key: TEST_TRADE_MAX_NOTIONAL_USD
+        value: "5"
+      - key: TELEGRAM_BOT_USERNAME
+        value: "TestTraid_bot"
       - key: DERIBIT_CLIENT_ID
         sync: false
       - key: DERIBIT_CLIENT_SECRET

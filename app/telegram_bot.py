@@ -88,6 +88,7 @@ class TelegramReporter:
         self._last_problem_notice = 0.0
         self._last_problem = ""
         self._previous_open_count = None
+        self._test_alerted_ids = set()
         self._panel_msg_id: Optional[int] = None
         self.stats = {
             "sent": 0,
@@ -215,6 +216,11 @@ class TelegramReporter:
                     {"text": "❤️ Health", "callback_data": "panel:health"},
                 ],
                 [
+                    {"text": "🧪 تست ۶۰ثانیه", "callback_data": "panel:testtrade"},
+                    {"text": "⏱ وضعیت تست", "callback_data": "panel:teststatus"},
+                    {"text": "🛑 بستن تست", "callback_data": "panel:testclose"},
+                ],
+                [
                     {"text": "▶️ Start", "callback_data": "panel:start"},
                     {"text": "⏹ Stop", "callback_data": "panel:stop"},
                     {"text": "🔄 پنل", "callback_data": "panel:home"},
@@ -314,6 +320,70 @@ class TelegramReporter:
         if self.dashboard_url:
             lines.append(f"Web: {_esc(self.dashboard_url)}")
         return "\n".join(lines)
+
+    def test_confirmation(self):
+        if not self._engine:
+            self.send("موتور در دسترس نیست.")
+            return
+        if self._engine.test_trader.is_active():
+            self.send(self.format_test_trade(self._engine.test_trader.snapshot()), reply_markup=self._kb())
+            return
+        settings = self._engine.settings
+        self.send(
+            f"🧪 <b>تأیید معامله تست — فقط پول آزمایشی</b>\n"
+            f"نماد: <b>{_esc(settings.test_trade_asset.upper())} USDC perpetual</b>\n"
+            f"حجم: کوچک‌ترین لات معتبر صرافی، حداکثر ${_f(settings.test_trade_max_notional_usd)}\n"
+            f"خروج: <b>۶۰ ثانیه پس از پرشدن ورود</b>، فقط reduce-only.\n"
+            f"در این مدت سفارش‌های پنج استراتژی موقتاً متوقف می‌شوند.\n"
+            f"پوزیشن قبلی روی نماد تست مجاز نیست. توقف صرافی یا قطع سرویس می‌تواند خروج را به تأخیر بیندازد.\n\n"
+            f"برای ارسال سفارش واقعی تست‌نت، تأیید کنید:",
+            reply_markup={"inline_keyboard": [
+                [{"text": "✅ تأیید و شروع تست ۶۰ثانیه", "callback_data": "panel:testconfirm"}],
+                [{"text": "انصراف / پنل", "callback_data": "panel:home"}],
+            ]},
+        )
+
+    def format_test_trade(self, state: dict) -> str:
+        entry = state.get("entry") or {}
+        exits = state.get("exits") or []
+        return (
+            f"⏱ <b>وضعیت معامله تست</b>\n"
+            f"state=<code>{_esc(state.get('status'))}</code> · active={_esc(state.get('active'))}\n"
+            f"نماد: {_esc(state.get('instrument'))}\n"
+            f"ورود پرشده: {_f(state.get('entry_filled_amount'), 6)}\n"
+            f"خروج پرشده: {_f(state.get('exit_filled_amount'), 6)}\n"
+            f"زمان ورود: {_esc(state.get('opened_at'))}\n"
+            f"زمان برنامه‌ریزی خروج: {_esc(state.get('close_due_at'))}\n"
+            f"زمان بسته‌شدن: {_esc(state.get('closed_at'))}\n"
+            f"باقی‌مانده تا خروج: {_f(state.get('seconds_remaining'), 0)} ثانیه\n"
+            f"order ورود: <code>{_esc(entry.get('order_id'))}</code>\n"
+            f"order خروج: <code>{_esc(', '.join(str(x.get('order_id')) for x in exits if x.get('order_id')) or 'none')}</code>\n"
+            f"{_esc(state.get('warning') or state.get('reason') or '')}"
+        )
+
+    def on_test_trade(self, event: str, state: dict):
+        if not self.enabled:
+            return
+        heads = {
+            "opened": "🧪 معامله تست باز شد", "opened_reconciled": "🧪 ورود تست با صرافی تطبیق داده شد",
+            "closed": "✅ خروج معامله تست تأیید شد", "closed_external": "ℹ️ حساب بدون long تست است؛ خروج تایمر ثبت نشد",
+            "recovered": "↩️ تست نیمه‌تمام از برچسب صرافی بازیابی شد",
+            "unfilled": "⏸ ورود تست پر نشد؛ معامله ایجاد نشد", "failed": "❌ سفارش تست رد شد",
+            "uncertain": "🚨 نتیجه سفارش تست نامشخص است", "warning": "🚨 خروج/وضعیت تست نیازمند توجه است",
+        }
+        for phase, receipts in (("entry", [state.get("entry") or {}]), ("exit", state.get("exits") or [])):
+            for receipt in receipts:
+                order_id = receipt.get("order_id")
+                if not order_id or not receipt.get("filled_amount") or order_id in self._test_alerted_ids:
+                    continue
+                self._test_alerted_ids.add(order_id)
+                self.stats["orders_ok"] += 1
+                self.journal.append({"ts": utcnow(), "asset": state.get("asset"), "status": "test_"+phase,
+                                     "amount": receipt.get("filled_amount"), "price": receipt.get("average_price"),
+                                     "notional_usd": float(receipt.get("filled_amount") or 0)*float(receipt.get("average_price") or 0),
+                                     "order_id": order_id, "pnl": None})
+                self.journal = self.journal[-500:]
+        self.send(f"<b>{_esc(heads.get(event, event))}</b>\n{self.format_test_trade(state)}", reply_markup=self._kb())
 
     def format_balance(self, snap: dict) -> str:
         acct = snap.get("account") or {}
@@ -481,6 +551,8 @@ class TelegramReporter:
         lines.append(f"sleeves_enabled={cfg.get('sleeves_enabled')}")
         lines.append(f"sleeve_weights={cfg.get('sleeve_weights')}")
         lines.append("")
+        lines.append("[MANUAL_60_SECOND_TEST]")
+        lines.append(json.dumps(snap.get("test_trade") or {}, ensure_ascii=False, indent=2))
         lines.append("[TRADING_READINESS]")
         lines.append(json.dumps(snap.get("diagnostics") or {}, ensure_ascii=False, indent=2))
         lines.append("[RISK]")
@@ -666,7 +738,8 @@ class TelegramReporter:
                         continue
                     text = (msg.get("text") or "").strip()
                     if text.startswith("/"):
-                        self._on_command(text.split()[0].split("@")[0].lower())
+                        parts = text.split(maxsplit=1)
+                        self._on_command(parts[0].split("@")[0].lower(), parts[1] if len(parts) > 1 else "")
             except Exception:
                 log.exception("tg poll")
                 time.sleep(3)
@@ -734,6 +807,20 @@ class TelegramReporter:
                         f"sleeve-longs≈{n_long} · actions={len(acts)}",
                         reply_markup=self._kb(),
                     )
+            elif action == "testtrade":
+                self.test_confirmation()
+            elif action == "testconfirm":
+                if not eng:
+                    self.send("موتور در دسترس نیست.")
+                    return
+                state = eng.test_trader.start()
+                if not state.get("active"):
+                    self.send(self.format_test_trade(state), reply_markup=self._kb())
+            elif action == "teststatus":
+                self.send(self.format_test_trade(eng.test_trader.snapshot() if eng else {}), reply_markup=self._kb())
+            elif action == "testclose":
+                if eng:
+                    self.send(self.format_test_trade(eng.test_trader.request_close()), reply_markup=self._kb())
             elif action == "start":
                 if eng:
                     eng.start()
@@ -748,7 +835,13 @@ class TelegramReporter:
             log.exception("callback %s", action)
             self.send(f"❌ {_esc(e)}", reply_markup=self._kb())
 
-    def _on_command(self, cmd: str) -> None:
+    def _on_command(self, cmd: str, argument: str = "") -> None:
+        if cmd == "/testtrade" or (cmd == "/start" and argument.strip() == "test60"):
+            self.test_confirmation()
+            return
+        if cmd == "/teststatus" or (cmd == "/start" and argument.strip() == "teststatus"):
+            self.send(self.format_test_trade(self._engine.test_trader.snapshot() if self._engine else {}), reply_markup=self._kb())
+            return
         if cmd in ("/start", "/help", "/panel"):
             self.send_panel()
             return

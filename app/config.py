@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     state_path: str = "state/bot_state.json"
     use_usdc_linear: bool = True
 
+    # Owner-confirmed manual minimum-lot test; testnet only, never a strategy signal.
+    test_trade_enabled: bool = True
+    test_trade_asset: str = "ETH"
+    test_trade_hold_seconds: int = Field(default=60, ge=60, le=60)
+    test_trade_max_notional_usd: float = Field(default=5.0, gt=0, le=10.0)
+    telegram_bot_username: str = "TestTraid_bot"
+
     # Telegram ops (token/chat via env only)
     telegram_enabled: bool = True
     telegram_bot_token: str = ""

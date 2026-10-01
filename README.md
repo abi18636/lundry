@@ -45,3 +45,18 @@ Service liveness does **not** imply trading readiness: inspect `trading_ready`,
 
 Tests: `python -m pip install pytest && python -m pytest -q tests`.
 Hourly reviews run inside the service; the GitHub workflow (if installed successfully) also checks external health.
+
+## Owner-confirmed 60-second test trade
+
+See `TIMED_TEST_TRADE_FA.md`. Telegram `/panel` → test → owner confirmation, or
+the web test button with `DASHBOARD_TOKEN`. Without that token the web button
+opens Telegram owner confirmation, not an unauthenticated trading endpoint.
+
+Minimum valid ETH lot, testnet only, maximum $5 notional. Normal strategy orders
+are paused during the test. A separate timer attempts a reduce-only exit 60 seconds
+after confirmed entry fill. Exchange/network/host outages can delay execution; the
+UI never treats countdown expiry as proof of a fill. Unique labels allow restart
+reconciliation without reopening another test.
+
+API: `GET /api/test-trade`, authenticated `POST /api/test-trade/start` and
+`POST /api/test-trade/close`.

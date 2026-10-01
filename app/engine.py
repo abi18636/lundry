@@ -22,6 +22,7 @@ from app.deribit import DeribitAPIError, DeribitClient
 from app.execution import fill_summary, floor_amount, ioc_price, plan_rebalance, signed_position
 from app.sleeves import parse_weights, prepare_frames, run_all_sleeves
 from app.telegram_bot import get_reporter
+from app.test_trade import TimedTestTrade
 
 log = logging.getLogger("engine")
 
@@ -57,6 +58,7 @@ class BotState:
     pending_order: Optional[dict] = None
     last_fill_at: Optional[str] = None
     ops_reviews: List[dict] = field(default_factory=list)
+    test_trade: Dict[str, Any] = field(default_factory=lambda: {"active": False, "status": "idle", "environment": "testnet-live"})
 
     def push(self, kind: str, msg: str, **extra):
         self.events = (self.events + [{"ts": utcnow(), "kind": kind, "msg": msg, **extra}])[-300:]
@@ -69,6 +71,8 @@ class TradingEngine:
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._cycle_lock = threading.Lock()
+        self._save_lock = threading.RLock()
+        self._wake_cycle = threading.Event()
         self.client: Optional[DeribitClient] = None
         self._candle_cache: Dict[str, tuple] = {}
         self._signal_cache: Optional[tuple] = None
@@ -78,6 +82,7 @@ class TradingEngine:
         self._recovered_fills: List[dict] = []
         Path(self.settings.state_path).parent.mkdir(parents=True, exist_ok=True)
         self._restore()
+        self.test_trader = TimedTestTrade(self)
 
     def _restore(self):
         try:
@@ -88,6 +93,7 @@ class TradingEngine:
             self.state.orders_log = (saved.get("orders_log") or [])[-300:]
             self.state.last_fill_at = saved.get("last_fill_at")
             self.state.ops_reviews = (saved.get("ops_reviews") or [])[-24:]
+            self.state.test_trade = saved.get("test_trade") or self.state.test_trade
         except FileNotFoundError:
             pass
         except Exception as exc:
@@ -98,12 +104,15 @@ class TradingEngine:
             return
         self._stop.clear()
         self.state.running, self.state.mode = True, "starting"
+        self.test_trader.begin_recovery()
         self._thread = threading.Thread(target=self._loop, name="superbot-loop", daemon=True)
         self._thread.start()
         self.state.push("info", "SUPER engine started; execution requires fresh open books")
 
     def stop(self):
         self._stop.set()
+        self._wake_cycle.set()
+        self.test_trader.request_close()
         self.state.running, self.state.mode = False, "stopping" if self.state.cycle_in_progress else "stopped"
         self.state.push("info", "engine stop requested; no new orders after stop")
 
@@ -112,6 +121,8 @@ class TradingEngine:
         s = self.settings
         result = copy.deepcopy(asdict(self.state))
         result["bot"] = "zenith-SUPER"
+        if hasattr(self, "test_trader"):
+            result["test_trade"] = self.test_trader.snapshot()
         result["events"] = result["events"][-60:]
         result["config"] = {
             "capital_usd": s.capital_usd, "lev_cap": s.lev_cap, "long_only": s.long_only,
@@ -127,20 +138,27 @@ class TradingEngine:
             "max_spread_bps": s.max_spread_bps, "max_slippage_bps": s.max_slippage_bps,
             "ops_review_seconds": s.ops_review_seconds,
             "signal_timing": "completed_1h_bars_next_bar_decision",
+            "test_trade_enabled": s.test_trade_enabled,
+            "test_trade_asset": s.test_trade_asset.upper(),
+            "test_trade_hold_seconds": s.test_trade_hold_seconds,
+            "test_trade_max_notional_usd": s.test_trade_max_notional_usd,
+            "telegram_test_url": f"https://t.me/{s.telegram_bot_username}?start=test60",
         }
         return result
 
     def _save(self):
-        try:
-            path = Path(self.settings.state_path)
-            # Keep more fill history than the dashboard event tail. Atomic replacement.
-            snapshot = self.snapshot()
-            snapshot["orders_log"] = self.state.orders_log[-300:]
-            temp = path.with_suffix(".tmp")
-            temp.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2, default=str))
-            os.replace(temp, path)
-        except Exception as exc:
-            log.warning("state save failed: %s", type(exc).__name__)
+        with self._save_lock:
+            try:
+                path = Path(self.settings.state_path)
+                # Keep more fill history than the dashboard event tail. Atomic replacement.
+                snapshot = self.snapshot()
+                snapshot["orders_log"] = self.state.orders_log[-300:]
+                temp = path.with_suffix(".tmp")
+                temp.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2, default=str))
+                os.replace(temp, path)
+            except Exception as exc:
+                log.warning("state save failed: %s", type(exc).__name__)
+
 
     def _ensure_client(self) -> DeribitClient:
         if self.client is None:
@@ -172,9 +190,10 @@ class TradingEngine:
                 except Exception:
                     log.warning("error notification unavailable")
             self._save()
-            self._stop.wait(max(5, int(self.settings.loop_seconds)))
+            self._wake_cycle.wait(max(5, int(self.settings.loop_seconds)))
+            self._wake_cycle.clear()
         self.state.running, self.state.mode = False, "stopped"
-        if self.client:
+        if self.client and not self.test_trader.is_active():
             try:
                 self.client.close()
             except Exception:
@@ -289,7 +308,34 @@ class TradingEngine:
         except Exception as exc:
             return f"execution_uncertain: reconciliation unavailable ({exc})"
 
+    def request_cycle(self):
+        self._wake_cycle.set()
+
+    def notify_test_trade(self, event: str, snapshot: dict):
+        self.state.push("test_trade", f"test {event}: {snapshot.get('status')}", test_id=snapshot.get("id"))
+        reporter = get_reporter()
+        if reporter and hasattr(reporter, "on_test_trade"):
+            # Telegram must never delay the 60-second exit timer.
+            threading.Thread(target=reporter.on_test_trade, args=(event, copy.deepcopy(snapshot)),
+                             name="test-trade-notice", daemon=True).start()
+
+    def _paused_test_cycle(self):
+        self.state.mode = "test_recovery" if self.test_trader.recovery_in_progress else "test_trade"
+        self.state.last_loop_at = utcnow()
+        self.state.loop_count += 1
+        self.state.actions = [{"asset": a, "instrument": self.settings.instrument_for(a),
+                               "status": "test_trade_paused", "reason": "Strategy orders paused while the isolated timed test is active",
+                               "can_execute": False, "market_state": (self.state.market_data.get(a) or {}).get("market_state", "unknown")}
+                              for a in self.settings.asset_list]
+        self.state.diagnostics = {**self.state.diagnostics, "trading_ready": False, "trading_state": "manual_test",
+                                  "primary_blocker": "test_recovery" if self.test_trader.recovery_in_progress else "test_trade_active",
+                                  "last_fill_at": self.state.last_fill_at, "confirmed_fill_count": len(self.state.orders_log)}
+        return {"sleeves": self.state.sleeves, "net_book": self.state.net_book, "actions": self.state.actions,
+                "diagnostics": self.state.diagnostics, "test_trade": self.test_trader.snapshot()}
+
     def _once_unlocked(self) -> dict:
+        if self.test_trader.is_active() or self.test_trader.recovery_in_progress:
+            return self._paused_test_cycle()
         s = self.settings
         self.state.mode = "running"
         if self._environment() != "testnet-live" and not s.allow_mainnet_trading:
@@ -590,7 +636,7 @@ class TradingEngine:
         self.state.last_fill_at = utcnow()
         entry = {"ts": self.state.last_fill_at, **{k: action.get(k) for k in (
             "asset", "instrument", "status", "amount", "price", "notional_usd", "order_id", "order_state",
-            "filled_amount", "trade_ids", "fee", "fee_currencies", "direction", "reduce_only", "label")}}
+            "filled_amount", "trade_ids", "fee", "fee_currencies", "direction", "reduce_only", "label", "test_id")}}
         self.state.orders_log = (self.state.orders_log+[entry])[-300:]
 
     def _finish(self, actions: list, market_data: dict, fatal: list) -> dict:
