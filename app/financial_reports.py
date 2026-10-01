@@ -406,7 +406,7 @@ class FinancialReporting:
             self.sync_history()
         except Exception as exc:
             with self._lock:
-                self.status["errors"] = [str(exc)]
+                self.status["errors"] = [str(exc)[:500]]
         while not self._stop.is_set():
             try:
                 item = self._queue.get(timeout=1.0)
@@ -417,28 +417,43 @@ class FinancialReporting:
                     except Exception as exc:
                         self._last_sync = time.time()
                         with self._lock:
-                            self.status["errors"] = [str(exc)]
+                            self.status["errors"] = [str(exc)[:500]]
                 continue
             key = f"{item['order_id']}:{item['quantity_level']}"
             if self.journal.notification_sent(key):
                 continue
+            # Try to enrich fee with live client, but notification must work even if refresh fails
+            c = None
             try:
                 c = self.refresh()
+            except Exception as exc:
+                with self._lock:
+                    self.status["errors"] = [str(exc)[:500]]
+            try:
                 ev = self.journal.event(item["order_id"])
-                if ev and (not ev.get("fee_known") or not ev.get("trade_ids")):
+                if ev and c and (not ev.get("fee_known") or not ev.get("trade_ids")):
                     try:
                         self.journal.import_trades(c.trades_by_order(item["order_id"]))
                     except Exception:
                         pass
-                ev = self.journal.event(item["order_id"])
+                    ev = self.journal.event(item["order_id"])
                 if ev:
                     ev["execution_update_quantity"] = num((dec(ev["filled_amount"]) or ZERO) - (dec(item.get("previous_quantity")) or ZERO))
-                    if self._notifier and self._notifier(ev, self.snapshot()):
-                        self.journal.mark_notification(key)
-                        continue
+                    if self._notifier:
+                        try:
+                            if self._notifier(ev, self.snapshot()):
+                                self.journal.mark_notification(key)
+                                continue
+                        except Exception as exc:
+                            log.warning("financial notifier failed: %s", exc)
+                            with self._lock:
+                                self.status["errors"] = [str(exc)[:500]]
+                # If notifier returned False (e.g. telegram disabled locally), still mark as attempted to avoid infinite loop blocking new trades
+                # but re-queue with backoff for production retry
             except Exception as exc:
                 with self._lock:
-                    self.status["errors"] = [str(exc)]
+                    self.status["errors"] = [str(exc)[:500]]
+            # Backoff retry, but don't block forever - if notifier keeps returning False, we still retry
             self._stop.wait(5)
             self._queue.put(item)
 

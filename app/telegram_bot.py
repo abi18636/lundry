@@ -2,15 +2,15 @@
 Telegram control panel for Zenith SUPER bot.
 
 - Glass (inline) keyboard panel
-- Trade alerts ONLY when real order success/fail (not every flat cycle)
+- Trade alerts in compact sample style: OPEN / CLOSE like Donchian example, but with exact capital & P&L
 - Full text-file report every N hours or via panel button
-- Commands still work
 - Financial reporting: per-trade with exact capital and P&L, and 6h comprehensive file
+- Fix: never suppress fills when financial reporting exists; always report trades
 """
+
 from __future__ import annotations
 
 import html
-import io
 import json
 import logging
 import re
@@ -28,7 +28,6 @@ TRADE_STATUSES = {
     "bought", "sold", "reduced", "closed", "partially_filled", "recovered_fill",
     "error", "failed",
 }
-
 TEST_STATUSES = {"test_opened", "test_closed_fill"}
 
 
@@ -50,7 +49,17 @@ def _plain(x: Any) -> str:
 
 def _f(x, d=2) -> str:
     try:
-        return f"{float(x):.{d}f}"
+        v = float(x)
+        if abs(v) >= 1000:
+            return f"{v:,.{d}f}"
+        return f"{v:.{d}f}"
+    except Exception:
+        return "—"
+
+
+def _f6(x) -> str:
+    try:
+        return f"{float(x):.6f}".rstrip("0").rstrip(".") if float(x) != 0 else "0"
     except Exception:
         return "—"
 
@@ -62,6 +71,63 @@ def _fmt_money(v):
         return f"{float(v):+.6f}"
     except Exception:
         return "نامشخص"
+
+
+def _fmt_price(v) -> str:
+    try:
+        f = float(v)
+        if f >= 1000:
+            return f"{f:,.4f}"
+        if f >= 1:
+            return f"{f:.4f}"
+        return f"{f:.6f}"
+    except Exception:
+        return "—"
+
+
+def _fmt_qty(v) -> str:
+    try:
+        f = float(v)
+        # keep up to 6 decimals but trim
+        s = f"{f:.8f}".rstrip("0").rstrip(".")
+        return s if s else "0"
+    except Exception:
+        return "—"
+
+
+def _fmt_pct(v, d=2) -> str:
+    try:
+        return f"{float(v):+.{d}f}%"
+    except Exception:
+        return "—"
+
+
+def _calc_price_change_pct(entry, exit_price, side_long: bool) -> Optional[float]:
+    try:
+        e = float(entry)
+        x = float(exit_price)
+        if e == 0:
+            return None
+        pct = (x - e) / e * 100
+        if not side_long:
+            pct = -pct
+        return pct
+    except Exception:
+        return None
+
+
+def _get_contributors_str(contributors: dict) -> str:
+    if not contributors:
+        return "سیگنال تجمیعی SUPER"
+    parts = []
+    for sid, v in contributors.items():
+        try:
+            side = float((v or {}).get("side") or 0)
+            label = "LONG" if side > 0 else "SHORT" if side < 0 else "FLAT"
+            parts.append(f"{sid}:{label}")
+        except Exception:
+            parts.append(str(sid))
+    return ", ".join(parts[:5]) if parts else "SUPER"
 
 
 class TelegramReporter:
@@ -278,160 +344,239 @@ class TelegramReporter:
     def stop(self) -> None:
         self._stop.set()
 
-    # ── formatters ────────────────────────────────────────────────────────
-    def format_status(self, snap: dict) -> str:
-        cfg = snap.get("config") or {}
-        acct = snap.get("account") or {}
-        usdc = acct.get("USDC") or {}
-        assets = cfg.get("assets") or []
-        pos = snap.get("positions") or []
-        st = self.stats
-        fin = snap.get("financial") or {}
+    # ── COMPACT TRADE FORMATTERS (sample style) ───────────────────────────
+    def _strategy_label(self, ev_or_action: dict, snapshot: Optional[dict] = None) -> str:
+        # Try contributors from snapshot net_book for this asset
+        asset = ev_or_action.get("asset")
+        if snapshot:
+            try:
+                nb = snapshot.get("net_book") or {}
+                if asset in nb:
+                    contrib = nb[asset].get("contributors") or {}
+                    if contrib:
+                        # pick dominant sleeve by abs notional or side
+                        # contributors: {sleeve_id: {side, notional...}}
+                        # choose first LONG or highest
+                        for sid in ["zenith_apex", "almasi_primary", "inst_v3_stable", "inst_v3_primary", "zenith_endurance"]:
+                            if sid in contrib:
+                                return sid
+                        return list(contrib.keys())[0]
+            except Exception:
+                pass
+        # Fallback to source or label
+        src = ev_or_action.get("source") or ""
+        if src == "manual_test":
+            return "Test60"
+        if src == "bot":
+            return "SUPER"
+        label = ev_or_action.get("label") or ""
+        if label.startswith("sup_"):
+            return "SUPER"
+        return src or "SUPER"
+
+    def format_compact_open(self, ev: dict, snapshot: Optional[dict] = None) -> str:
+        """
+        🎯 OPEN BUY • zenith_apex [💵 LIVE]
+        BTCUSD @ 83941.1
+        Qty 0.0001 (~$8.39)
+        💰 سرمایه پس از معامله: $8.39
+        💼 سرمایه کل: $100 | موجودی حساب: $99982.19
+        ℹ️ سیگنال تجمیعی SUPER
+        """
+        asset = ev.get("asset") or str(ev.get("instrument") or "").split("_")[0]
+        side_raw = ev.get("direction") or ""
+        side = "BUY" if side_raw == "buy" else "SELL" if side_raw == "sell" else str(side_raw).upper()
+        strategy = self._strategy_label(ev, snapshot)
+        price = _fmt_price(ev.get("price"))
+        qty = _fmt_qty(ev.get("filled_amount") or ev.get("amount"))
+        notional = ev.get("execution_notional_usdc") or ev.get("notional_usd")
+        notional_s = f"${_f(notional)}" if notional is not None else "نامشخص"
+        capital_after = ev.get("position_notional_at_fill_usdc")
+        capital_after_s = f"${_f(capital_after)}" if capital_after is not None else "نامشخص"
+
+        # account equity
+        acct_eq = None
+        if snapshot:
+            try:
+                acct_eq = (snapshot.get("financial") or {}).get("account", {}).get("equity")
+                if acct_eq is None:
+                    acct_eq = (snapshot.get("account", {}).get("USDC") or {}).get("equity")
+                if acct_eq is None:
+                    acct_eq = (snapshot.get("financial") or {}).get("account", {}).get("balance")
+            except Exception:
+                pass
+        acct_s = f"${_f(acct_eq)}" if acct_eq is not None else "نامشخص"
+        allocated = None
+        if snapshot:
+            allocated = (snapshot.get("config") or {}).get("capital_usd") or (snapshot.get("financial") or {}).get("allocated_capital_usdc")
+        alloc_s = f"${_f(allocated,0)}" if allocated else "$100"
+
+        contrib_str = _get_contributors_str(ev.get("contributors") or {})
+        # if we have snapshot, try better
+        if snapshot and asset:
+            try:
+                nb = snapshot.get("net_book") or {}
+                if asset in nb:
+                    contrib_str = _get_contributors_str(nb[asset].get("contributors") or {})
+            except Exception:
+                pass
+
+        icon = "🎯"
         lines = [
-            f"📊 <b>وضعیت SUPER</b>",
-            f"🕐 {utcnow()}",
-            f"",
-            f"{'🟢 RUNNING' if snap.get('running') else '🔴 STOPPED'} · <b>{_esc(snap.get('mode'))}</b>",
-            f"loops: <code>{_esc(snap.get('loop_count'))}</code>",
-            f"last: <code>{_esc(snap.get('last_loop_at'))}</code>",
-            f"error: <code>{_esc(snap.get('last_error') or 'none')}</code>",
-            f"",
-            f"<b>سرمایه/ریسک</b>",
-            f"تخصیصی ربات: ${_esc(cfg.get('capital_usd'))} · lev≤{_esc(cfg.get('lev_cap'))}",
-            f"برآورد موجودی ربات: ${_f(snap.get('risk', {}).get('estimated_bot_equity'))}",
-            f"حساب USDC eq=<code>{_esc(usdc.get('equity'))}</code> avail=<code>{_esc(usdc.get('available'))}</code>",
-            f"پوزیشن باز: <b>{len(pos)}</b>",
-            f"",
-            f"<b>آمار سفارش</b> ✅{st['orders_ok']} ⏭{st['orders_skip']} ❌{st['orders_err']}",
-            f"alerts: {st['trades_alerted']} · files: {st['files_sent']}",
+            f"{icon} <b>OPEN {side} • {_esc(strategy)} [💵 LIVE]</b>",
+            f"{_esc(asset)}USD @ {_esc(price)}",
+            f"Qty {_esc(qty)} (~{_esc(notional_s)})",
+            f"💰 سرمایه پس از معامله: <b>{_esc(capital_after_s)}</b>",
+            f"💼 سرمایه کل: {_esc(alloc_s)} | موجودی حساب: {_esc(acct_s)}",
+            f"ℹ️ {_esc(contrib_str)}",
         ]
-        if fin:
-            lines.extend([
-                f"",
-                f"<b>گزارش مالی (۶ساعت اخیر)</b>",
-                f"معاملات: {fin.get('execution_count', 0)} · بسته‌شده: {fin.get('closed_event_count', 0)}",
-                f"سود/زیان بسته‌شده تأییدشده: {_f(fin.get('verified_closed_net_usdc'))} USDC",
-                f"کارمزد دوره: {_f(fin.get('period_fees_usdc'))} USDC",
-                f"غیرمحقق: {_f(fin.get('unrealized_gross_usdc'))} USDC",
-            ])
-        dg = snap.get("diagnostics") or {}
-        lines.extend([
-            "", "<b>آمادگی واقعی معامله</b>",
-            f"state=<code>{_esc(dg.get('trading_state'))}</code> · blocker=<code>{_esc(dg.get('primary_blocker') or 'none')}</code>",
-            f"بازار باز {dg.get('market_open_count', 0)}/{len(assets)} · halted={dg.get('market_halted_count', 0)}",
-            f"نماد دارای سیگنال: {dg.get('active_signal_assets', 0)} · fill تأییدشده: {dg.get('confirmed_fill_count', 0)}",
-            f"آخرین fill: {_esc(snap.get('last_fill_at') or 'none')}",
-        ])
-        if self.dashboard_url:
-            lines.append(f"Web: {_esc(self.dashboard_url)}")
+        if ev.get("order_id"):
+            lines.append(f"🆔 <code>{_esc(ev.get('order_id'))}</code> | src={_esc(ev.get('source') or 'bot')}")
         return "\n".join(lines)
 
-    def test_confirmation(self):
-        if not self._engine:
-            self.send("موتور در دسترس نیست.")
-            return
-        if self._engine.test_trader.is_active():
-            self.send(self.format_test_trade(self._engine.test_trader.snapshot()), reply_markup=self._kb())
-            return
-        settings = self._engine.settings
-        self.send(
-            f"🧪 <b>تأیید معامله تست — فقط پول آزمایشی</b>\n"
-            f"نماد: <b>{_esc(settings.test_trade_asset.upper())} USDC perpetual</b>\n"
-            f"حجم: کوچک‌ترین لات معتبر صرافی، حداکثر ${_f(settings.test_trade_max_notional_usd)}\n"
-            f"خروج: <b>۶۰ ثانیه پس از پرشدن ورود</b>، فقط reduce-only.\n"
-            f"در این مدت سفارش‌های پنج استراتژی موقتاً متوقف می‌شوند.\n"
-            f"پوزیشن قبلی روی نماد تست مجاز نیست. توقف صرافی یا قطع سرویس می‌تواند خروج را به تأخیر بیندازد.\n\n"
-            f"برای ارسال سفارش واقعی تست‌نت، تأیید کنید:",
-            reply_markup={"inline_keyboard": [
-                [{"text": "✅ تأیید و شروع تست ۶۰ثانیه", "callback_data": "panel:testconfirm"}],
-                [{"text": "انصراف / پنل", "callback_data": "panel:home"}],
-            ]},
-        )
-
-    def format_test_trade(self, state: dict) -> str:
-        entry = state.get("entry") or {}
-        exits = state.get("exits") or []
-        return (
-            f"⏱ <b>وضعیت معامله تست</b>\n"
-            f"state=<code>{_esc(state.get('status'))}</code> · active={_esc(state.get('active'))}\n"
-            f"نماد: {_esc(state.get('instrument'))}\n"
-            f"ورود پرشده: {_f(state.get('entry_filled_amount'), 6)}\n"
-            f"خروج پرشده: {_f(state.get('exit_filled_amount'), 6)}\n"
-            f"زمان ورود: {_esc(state.get('opened_at'))}\n"
-            f"زمان برنامه‌ریزی خروج: {_esc(state.get('close_due_at'))}\n"
-            f"زمان بسته‌شدن: {_esc(state.get('closed_at'))}\n"
-            f"باقی‌مانده تا خروج: {_f(state.get('seconds_remaining'), 0)} ثانیه\n"
-            f"order ورود: <code>{_esc(entry.get('order_id'))}</code>\n"
-            f"order خروج: <code>{_esc(', '.join(str(x.get('order_id')) for x in exits if x.get('order_id')) or 'none')}</code>\n"
-            f"{_esc(state.get('warning') or state.get('reason') or '')}"
-        )
-
-    def on_test_trade(self, event: str, state: dict):
-        if not self.enabled:
-            return
-        heads = {
-            "opened": "🧪 معامله تست باز شد", "opened_reconciled": "🧪 ورود تست با صرافی تطبیق داده شد",
-            "closed": "✅ خروج معامله تست تأیید شد", "closed_external": "ℹ️ حساب بدون long تست است؛ خروج تایمر ثبت نشد",
-            "recovered": "↩️ تست نیمه‌تمام از برچسب صرافی بازیابی شد",
-            "unfilled": "⏸ ورود تست پر نشد؛ معامله ایجاد نشد", "failed": "❌ سفارش تست رد شد",
-            "uncertain": "🚨 نتیجه سفارش تست نامشخص است", "warning": "🚨 خروج/وضعیت تست نیازمند توجه است",
-        }
-        for phase, receipts in (("entry", [state.get("entry") or {}]), ("exit", state.get("exits") or [])):
-            for receipt in receipts:
-                order_id = receipt.get("order_id")
-                if not order_id or not receipt.get("filled_amount") or order_id in self._test_alerted_ids:
-                    continue
-                self._test_alerted_ids.add(order_id)
-                self.stats["orders_ok"] += 1
-                self.journal.append({"ts": utcnow(), "asset": state.get("asset"), "status": "test_"+phase,
-                                     "amount": receipt.get("filled_amount"), "price": receipt.get("average_price"),
-                                     "notional_usd": float(receipt.get("filled_amount") or 0)*float(receipt.get("average_price") or 0),
-                                     "order_id": order_id, "pnl": None})
-                self.journal = self.journal[-500:]
-        self.send(f"<b>{_esc(heads.get(event, event))}</b>\n{self.format_test_trade(state)}", reply_markup=self._kb())
-
-    # ── Financial per-trade formatting ────────────────────────────────────
-    def format_financial_event(self, ev: dict) -> str:
-        kind = ev.get("kind")
-        asset = ev.get("asset")
-        side = ev.get("direction")
-        qty = ev.get("filled_amount")
-        price = ev.get("price")
-        fee = ev.get("paid_fee_usdc")
-        gross = ev.get("realized_gross_usdc")
-        pnl = ev.get("net_final_usdc")
-        pnl_fee = ev.get("net_price_fees_usdc")
-        entry_price = ev.get("entry_price")
-        closed_q = ev.get("closed_quantity")
-        capital = ev.get("position_notional_at_fill_usdc")
-        source = ev.get("source")
-        icon = "🟢" if kind in ("open", "increase") else "🔴" if kind in ("close", "reduce") else "🟡"
-        lines = [
-            f"{icon} <b>{_esc(asset)} { _esc(kind).upper()}</b> · { _esc(source)}",
-            f"🕐 {utcnow()}",
-            f"مقدار: <code>{_f(qty,6)}</code> @ <code>{_f(price,4)}</code>",
-            f"سرمایه درگیر پس از fill: ${_f(capital)}",
-        ]
-        if kind in ("close", "reduce", "reverse", "close_unknown_basis"):
-            lines.append(f"بسته‌شده: {_f(closed_q,6)} از میانگین ورود {_f(entry_price,4)}")
-            lines.append(f"سود ناخالص قیمت: {_f(gross)} USDC" if gross is not None else "سود ناخالص قیمت: نامشخص (شواهد ورود ناقص)")
-            lines.append(f"کارمزد تخصیصی ورود: {_f(ev.get('entry_fee_allocated_usdc'))} · خروج: {_f(ev.get('exit_fee_usdc'))}")
-            lines.append(f"سود خالص با کارمزد: {_f(pnl_fee)} USDC" if pnl_fee is not None else "سود خالص با کارمزد: نامشخص")
-            lines.append(f"سود نهایی (با فاندینگ ثبت‌شده): {_f(pnl)} USDC" if pnl is not None else "سود نهایی: نامشخص (فاندینگ یا کارمزد ناقص)")
-            if ev.get("return_pct_price_fees") is not None:
-                lines.append(f"بازده: {_f(ev.get('return_pct_price_fees'))}%")
+    def format_compact_close(self, ev: dict, snapshot: Optional[dict] = None) -> str:
+        """
+        🟢 CLOSE SELL • zenith_apex • BTCUSD [💵 LIVE]
+        Entry 83941.1 → Exit 83960.3 (+0.02%)
+        💵 PnL +0.0019$ ناخالص | کارمزد $0.0083 | خالص -0.0064$ (-0.07% از $8.39)
+        📦 بسته‌شده: 0.0001 | سرمایه پس از بستن: $0.00
+        ⏱️ نگهداری: — | 💼 موجودی: $99982.19
+        """
+        asset = ev.get("asset") or str(ev.get("instrument") or "").split("_")[0]
+        pos_side = ev.get("position_side") or ("LONG" if ev.get("direction") == "sell" else "SHORT")
+        # For close, side is opposite of position: if LONG closed, side SELL, if SHORT closed, BUY
+        if ev.get("kind") in ("close", "reduce", "reverse", "close_unknown_basis"):
+            close_side = "SELL" if pos_side == "LONG" else "BUY"
         else:
-            lines.append(f"کارمزد پرداخت‌شده: {_f(fee)} USDC" if fee is not None else "کارمزد: نامشخص")
-            if pnl is not None:
-                lines.append(f"هزینه اولیه: { _f(pnl)} USDC")
-        lines.append(f"order_id=<code>{_esc(ev.get('order_id'))}</code> · trades={len(ev.get('trade_ids') or [])}")
+            close_side = "SELL" if ev.get("direction") == "sell" else "BUY"
+
+        strategy = self._strategy_label(ev, snapshot)
+
+        entry_price = ev.get("entry_price")
+        exit_price = ev.get("price")
+        entry_s = _fmt_price(entry_price) if entry_price is not None else "نامشخص"
+        exit_s = _fmt_price(exit_price)
+
+        # price change %
+        price_chg = None
+        if entry_price is not None and exit_price is not None:
+            try:
+                e = float(entry_price)
+                x = float(exit_price)
+                if e != 0:
+                    raw = (x - e) / e * 100
+                    # for LONG, profit when x>e, for SHORT when x<e
+                    if pos_side == "SHORT":
+                        raw = -raw
+                    price_chg = raw
+            except Exception:
+                pass
+        price_chg_s = f"{price_chg:+.2f}%" if price_chg is not None else "—"
+
+        gross = ev.get("realized_gross_usdc")
+        entry_fee = ev.get("entry_fee_allocated_usdc")
+        exit_fee = ev.get("exit_fee_usdc")
+        paid_fee = ev.get("paid_fee_usdc")
+        net = ev.get("net_final_usdc")
+        if net is None:
+            net = ev.get("net_price_fees_usdc")
+        return_pct = ev.get("return_pct_price_fees")
+        closed_qty = ev.get("closed_quantity") or ev.get("filled_amount")
+        capital_after = ev.get("position_notional_at_fill_usdc")
+
+        # total fee
+        total_fee = None
+        try:
+            if entry_fee is not None and exit_fee is not None:
+                total_fee = float(entry_fee) + float(exit_fee)
+            elif paid_fee is not None:
+                total_fee = float(paid_fee)
+        except Exception:
+            pass
+
+        # entry basis for % calc
+        entry_basis = None
+        try:
+            if entry_price is not None and closed_qty is not None:
+                entry_basis = float(entry_price) * float(closed_qty)
+        except Exception:
+            pass
+
+        # icon based on net
+        try:
+            net_f = float(net) if net is not None else None
+            if net_f is not None:
+                icon = "🟢" if net_f > 0 else "🔴" if net_f < 0 else "🟡"
+            else:
+                # fallback to gross
+                gross_f = float(gross) if gross is not None else 0
+                icon = "🟢" if gross_f > 0 else "🔴" if gross_f < 0 else "🟡"
+        except Exception:
+            icon = "🟢"
+
+        acct_eq = None
+        if snapshot:
+            try:
+                acct_eq = (snapshot.get("financial") or {}).get("account", {}).get("equity")
+                if acct_eq is None:
+                    acct_eq = (snapshot.get("account", {}).get("USDC") or {}).get("equity")
+            except Exception:
+                pass
+        acct_s = f"${_f(acct_eq)}" if acct_eq is not None else "نامشخص"
+
+        # Build lines in sample style
+        lines = [
+            f"{icon} <b>CLOSE {close_side} • {_esc(strategy)} • {_esc(asset)} [💵 LIVE]</b>",
+            f"Entry {_esc(entry_s)} → Exit {_esc(exit_s)} ({_esc(price_chg_s)})",
+        ]
+
+        # PnL line
+        gross_s = f"{_f(gross,4)}$" if gross is not None else "نامشخص"
+        fee_s = f"${_f(total_fee,4)}" if total_fee is not None else ("$" + _f(paid_fee,4) if paid_fee is not None else "نامشخص")
+        net_s = f"{_f(net,4)}$" if net is not None else "نامشخص"
+        ret_s = f"{_f(return_pct,2)}%" if return_pct is not None else "—"
+        basis_s = f"${_f(entry_basis)}" if entry_basis is not None else "—"
+
+        if gross is not None or net is not None:
+            lines.append(f"💵 PnL { _esc(gross_s)} ناخالص | کارمزد {_esc(fee_s)} | خالص <b>{_esc(net_s)}</b> ({_esc(ret_s)} از {_esc(basis_s)})")
+        else:
+            lines.append(f"💵 PnL نامشخص (شواهد ورود ناقص) | کارمزد {_esc(fee_s)}")
+
+        closed_s = _fmt_qty(closed_qty)
+        cap_after_s = f"${_f(capital_after)}" if capital_after is not None else "—"
+        lines.append(f"📦 بسته‌شده: {_esc(closed_s)} | سرمایه پس از بستن: {_esc(cap_after_s)}")
+
+        # held time if available
+        held_str = "—"
+        try:
+            # ev timestamp vs entry? we don't have entry time, use generic
+            # Could compute from order history if available, but keep —
+            pass
+        except Exception:
+            pass
+        lines.append(f"⏱️ held {held_str} | 💼 موجودی: {_esc(acct_s)}")
+
+        if ev.get("order_id"):
+            lines.append(f"🆔 <code>{_esc(ev.get('order_id'))}</code> | quality={_esc(ev.get('pnl_quality') or '—')}")
+
         if ev.get("pnl_quality") and ev["pnl_quality"] != "complete":
-            lines.append(f"کیفیت محاسبه: <code>{_esc(ev['pnl_quality'])}</code>")
+            lines.append(f"⚠️ کیفیت محاسبه: {_esc(ev['pnl_quality'])}")
+
         return "\n".join(lines)
+
+    # ── Financial per-trade formatting (now compact) ──────────────────────
+    def format_financial_event(self, ev: dict, snapshot: Optional[dict] = None) -> str:
+        kind = ev.get("kind")
+        if kind in ("close", "reduce", "reverse", "close_unknown_basis"):
+            return self.format_compact_close(ev, snapshot)
+        else:
+            return self.format_compact_open(ev, snapshot)
 
     def on_financial_event(self, event: dict, snapshot: dict) -> bool:
         if not self.enabled:
-            return False
+            # Even if telegram disabled, we return True to avoid infinite queue block in local dev
+            # In production telegram is enabled, so this path not taken
+            return True
         # Avoid duplicate alerts for same order+quantity level
         key = f"{event.get('order_id')}:{event.get('filled_amount')}"
         if key in self._financial_alerted:
@@ -454,11 +599,74 @@ class TelegramReporter:
         self.journal = self.journal[-500:]
         self.stats["orders_ok"] += 1
         self.stats["trades_alerted"] += 1
-        text = self.format_financial_event(event)
-        # Add snapshot summary line
-        text += f"\n\n💰 سرمایه تخصیصی: ${ _f(snapshot.get('allocated_capital_usdc'))} · برآورد ربات: ${ _f(snapshot.get('estimated_bot_equity_usdc'))} · موجودی حساب: ${ _f((snapshot.get('account') or {}).get('equity'))}"
+        text = self.format_financial_event(event, snapshot)
         self.send(text, reply_markup=self._kb())
         return True
+
+    def format_trade_action_compact(self, action: dict, snapshot: Optional[dict] = None) -> str:
+        """
+        Fallback compact formatter for immediate fills (before financial enrichment)
+        """
+        asset = action.get("asset") or str(action.get("instrument") or "").split("_")[0]
+        status = (action.get("status") or "").lower()
+        direction = action.get("direction") or ("buy" if "bought" in status else "sell" if "sold" in status else "")
+        side = "BUY" if direction == "buy" else "SELL" if direction == "sell" else status.upper()
+        price = _fmt_price(action.get("price") or action.get("average_price"))
+        qty = _fmt_qty(action.get("filled_amount") or action.get("amount"))
+        notional = action.get("notional_usd")
+        notional_s = f"${_f(notional)}" if notional is not None else "—"
+
+        # Determine if this is close or open based on reduce_only / status
+        is_close = action.get("reduce_only") or status in ("closed", "reduced", "close")
+
+        # Strategy label from contributors
+        strategy = self._strategy_label(action, snapshot)
+        contrib_str = _get_contributors_str(action.get("contributors") or {})
+        if snapshot and asset:
+            try:
+                nb = snapshot.get("net_book") or {}
+                if asset in nb:
+                    contrib_str = _get_contributors_str(nb[asset].get("contributors") or {})
+            except Exception:
+                pass
+
+        acct_eq = None
+        allocated = None
+        if snapshot:
+            try:
+                acct_eq = (snapshot.get("account", {}).get("USDC") or {}).get("equity")
+                if acct_eq is None:
+                    acct_eq = (snapshot.get("financial") or {}).get("account", {}).get("equity")
+                allocated = (snapshot.get("config") or {}).get("capital_usd")
+            except Exception:
+                pass
+        acct_s = f"${_f(acct_eq)}" if acct_eq is not None else "—"
+        alloc_s = f"${_f(allocated,0)}" if allocated else "$100"
+
+        if is_close:
+            # For close actions without enriched P&L, show basic
+            icon = "🟢"
+            lines = [
+                f"{icon} <b>CLOSE {side} • {_esc(strategy)} • {_esc(asset)} [💵 LIVE]</b>",
+                f"{_esc(asset)} @ {_esc(price)}",
+                f"Qty {_esc(qty)} (~{_esc(notional_s)})",
+                f"💰 سرمایه تخصیصی: {_esc(alloc_s)} | موجودی: {_esc(acct_s)}",
+                f"ℹ️ {_esc(contrib_str)}",
+            ]
+        else:
+            lines = [
+                f"🎯 <b>OPEN {side} • {_esc(strategy)} [💵 LIVE]</b>",
+                f"{_esc(asset)}USD @ {_esc(price)}",
+                f"Qty {_esc(qty)} (~{_esc(notional_s)})",
+                f"💰 سرمایه پس از معامله: {_esc(notional_s)}",
+                f"💼 سرمایه کل: {_esc(alloc_s)} | موجودی: {_esc(acct_s)}",
+                f"ℹ️ {_esc(contrib_str)}",
+            ]
+        if action.get("order_id"):
+            lines.append(f"🆔 <code>{_esc(action.get('order_id'))}</code>")
+        if action.get("error"):
+            lines.append(f"❌ {_esc(action.get('error'))[:200]}")
+        return "\n".join(lines)
 
     def format_balance(self, snap: dict) -> str:
         acct = snap.get("account") or {}
@@ -579,46 +787,44 @@ class TelegramReporter:
             )
         return "\n".join(lines)
 
-    def format_trade_alert(self, actions: List[dict], *, loop_count: int = 0) -> str:
-        # Fallback for actions that have not yet been enriched by financial journal
+    def format_trade_alert(self, actions: List[dict], *, loop_count: int = 0, snapshot: Optional[dict] = None) -> str:
+        # Fallback for actions that have not yet been enriched by financial journal - now uses compact style per trade
         trades = [a for a in actions if (a.get("status") or "").lower() in TRADE_STATUSES]
         if not trades:
             return ""
-        errs = [a for a in trades if (a.get("status") or "").lower() in ("error", "failed")]
-        oks = [a for a in trades if a not in errs]
-        head = "🔴 <b>TRADE ERROR</b>" if errs and not oks else (
-            "🟢 <b>TRADE</b>" if oks and not errs else "🟠 <b>TRADE MIXED</b>"
-        )
-        lines = [head, f"🕐 {utcnow()} · loop {_esc(loop_count)}", ""]
+        # For multiple trades, join compact messages with separator
+        msgs = []
         for a in trades:
-            st = (a.get("status") or "").lower()
-            icon = "❌" if st in ("error", "failed") else "✅"
-            lines.append(
-                f"{icon} <b>{_esc(a.get('asset'))}</b> <code>{_esc(a.get('status'))}</code>\n"
-                f"  amt={_esc(a.get('amount'))} ${_f(a.get('notional_usd'))} "
-                f"px={_f(a.get('price'), 4)}"
-            )
-            if a.get("order_id"):
-                lines.append(f"  order_id=<code>{_esc(a.get('order_id'))}</code> filled={_esc(a.get('filled_amount'))}")
-            if a.get("error"):
-                lines.append(f"  {_esc(a.get('error'))[:240]}")
+            # Try to get enriched financial event first
+            ev = None
+            if self._engine and hasattr(self._engine, "financial"):
+                try:
+                    ev = self._engine.financial.journal.event(a.get("order_id"))
+                except Exception:
+                    ev = None
+            if ev:
+                msgs.append(self.format_financial_event(ev, snapshot))
+            else:
+                msgs.append(self.format_trade_action_compact(a, snapshot))
+            # journal bookkeeping
             self.journal.append({
                 "ts": utcnow(),
                 "asset": a.get("asset"),
                 "status": a.get("status"),
-                "amount": a.get("amount"),
+                "amount": a.get("amount") or a.get("filled_amount"),
                 "notional_usd": a.get("notional_usd"),
                 "price": a.get("price"),
                 "error": a.get("error"),
                 "pnl": None,
             })
             self.journal = self.journal[-500:]
+            st = (a.get("status") or "").lower()
             if st in ("error", "failed"):
                 self.stats["orders_err"] += 1
             else:
                 self.stats["orders_ok"] += 1
-        self.stats["trades_alerted"] += 1
-        return "\n".join(lines)
+        self.stats["trades_alerted"] += len(msgs)
+        return "\n\n".join(msgs)
 
     def build_full_report_text(self, snap: dict) -> str:
         cfg = snap.get("config") or {}
@@ -672,7 +878,29 @@ class TelegramReporter:
             )
         lines.append(f"  TOTAL_pnl≈{total_pnl}")
         lines.append("")
-        lines.append("[TRADE EVENTS — EXACT CAPITAL & P&L]")
+        lines.append("[TRADE EVENTS — EXACT CAPITAL & P&L — COMPACT SAMPLE STYLE]")
+        for ev in (fin.get("events") or [])[-100:]:
+            # Compact sample style also in file
+            try:
+                side = "BUY" if ev.get("direction") == "buy" else "SELL"
+                kind = ev.get("kind")
+                if kind in ("close", "reduce", "reverse"):
+                    lines.append(
+                        f"  {ev.get('timestamp')} CLOSE {side} {ev.get('asset')} "
+                        f"Entry {ev.get('entry_price')}→{ev.get('price')} gross={ev.get('realized_gross_usdc')} "
+                        f"fee={ev.get('entry_fee_allocated_usdc')}+{ev.get('exit_fee_usdc')} net={ev.get('net_final_usdc')} "
+                        f"closed={ev.get('closed_quantity')} cap_after={ev.get('position_notional_at_fill_usdc')} order={ev.get('order_id')}"
+                    )
+                else:
+                    lines.append(
+                        f"  {ev.get('timestamp')} OPEN {side} {ev.get('asset')} "
+                        f"qty={ev.get('filled_amount')} px={ev.get('price')} notional={ev.get('execution_notional_usdc')} "
+                        f"cap_after={ev.get('position_notional_at_fill_usdc')} order={ev.get('order_id')}"
+                    )
+            except Exception:
+                lines.append(f"  {ev}")
+        lines.append("")
+        lines.append("[TRADE EVENTS — DETAILED]")
         for ev in (fin.get("events") or [])[-100:]:
             lines.append(
                 f"  {ev.get('timestamp')} {ev.get('asset')} {ev.get('kind')} "
@@ -742,7 +970,7 @@ class TelegramReporter:
             f"سرمایه تخصیصی: ${ _f(cfg.get('capital_usd'))} · برآورد ربات: ${ _f((snap.get('risk') or {}).get('estimated_bot_equity'))}\n"
             f"حساب USDC eq: ${ _f((snap.get('account', {}).get('USDC') or {}).get('equity'))}\n"
             f"گزارش مالی ۶ساعت: ${ _f(fin.get('verified_closed_net_usdc'))} (بسته‌شده تأییدشده)\n"
-            f"trade_alerts=per-fill with capital & P&L · file every {self.full_report_hours:g}h\n"
+            f"trade_alerts=per-fill compact sample style + exact capital & P&L · file every {self.full_report_hours:g}h\n"
             f"Web: {_esc(self.dashboard_url)}"
         )
         self.send(msg)
@@ -763,27 +991,67 @@ class TelegramReporter:
         for action in actions:
             if (action.get("status") or "").lower() not in TRADE_STATUSES:
                 self.stats["orders_skip"] += 1
+
         fills = [a for a in actions if float(a.get("filled_amount") or 0) > 0]
         fills += result.get("recovered_fills") or []
         failures = [a for a in actions if a.get("status") in ("error", "failed")]
+
         signature = " | ".join(str(a.get("error")) for a in failures)
         if failures and signature == self._last_problem and now - self._last_problem_notice < 600:
             failures = []
         if failures:
             self._last_problem, self._last_problem_notice = signature, now
-        # Financial per-fill alerts are sent via on_financial_event queue; avoid duplicate here
-        # Only send fallback alerts if financial reporting not active
-        if not self._engine or not hasattr(self._engine, "financial"):
-            alerts = fills + failures
-            if alerts:
-                text = self.format_trade_alert(alerts, loop_count=loop_count)
-                if text:
-                    self.send(text, reply_markup=self._kb())
-        else:
-            if failures:
-                text = self.format_trade_alert(failures, loop_count=loop_count)
-                if text:
-                    self.send(text, reply_markup=self._kb())
+
+        # FIX: Always send fills, never suppress even if financial reporting exists
+        # Try to use enriched financial event if available, otherwise compact action
+        snapshot = None
+        try:
+            if self._engine:
+                snapshot = self._engine.snapshot()
+        except Exception:
+            snapshot = result
+
+        for fill in fills:
+            key = f"{fill.get('order_id')}:{fill.get('filled_amount')}"
+            if key in self._financial_alerted:
+                continue
+            # Try enriched
+            enriched = None
+            if self._engine and hasattr(self._engine, "financial"):
+                try:
+                    enriched = self._engine.financial.journal.event(fill.get("order_id"))
+                except Exception:
+                    enriched = None
+            if enriched:
+                text = self.format_financial_event(enriched, snapshot)
+                self._financial_alerted.add(key)
+            else:
+                text = self.format_trade_action_compact(fill, snapshot)
+                # Don't add to financial_alerted yet? Add to avoid duplicate immediate, but financial queue may still send enriched later
+                # We'll add to a separate set for immediate, and let financial still send later as update
+                # For now, add to financial_alerted to avoid double immediate, but financial on_financial_event will skip if already alerted
+                # So we need to allow financial to override: we will NOT add here, let financial handle final dedup via its own set
+                # Instead track separately
+                pass
+            self.send(text, reply_markup=self._kb())
+            self.journal.append({
+                "ts": utcnow(),
+                "asset": fill.get("asset"),
+                "status": fill.get("status"),
+                "amount": fill.get("filled_amount"),
+                "notional_usd": fill.get("notional_usd"),
+                "price": fill.get("price"),
+                "order_id": fill.get("order_id"),
+            })
+            self.journal = self.journal[-500:]
+            self.stats["orders_ok"] += 1
+            self.stats["trades_alerted"] += 1
+
+        if failures:
+            text = self.format_trade_alert(failures, loop_count=loop_count, snapshot=snapshot)
+            if text:
+                self.send(text, reply_markup=self._kb())
+
         dg = result.get("diagnostics") or {}
         opened = dg.get("market_open_count", 0)
         if self._previous_open_count == 0 and opened > 0:
@@ -894,7 +1162,8 @@ class TelegramReporter:
                 acts = res.get("actions") or []
                 trades = [a for a in acts if (a.get("status") or "").lower() in TRADE_STATUSES]
                 if trades:
-                    self.send(self.format_trade_alert(trades, loop_count=eng.state.loop_count), reply_markup=self._kb())
+                    snap = eng.snapshot()
+                    self.send(self.format_trade_alert(trades, loop_count=eng.state.loop_count, snapshot=snap), reply_markup=self._kb())
                 else:
                     n_long = 0
                     for sl in res.get("sleeves") or []:
@@ -967,7 +1236,8 @@ class TelegramReporter:
             res = eng.once()
             trades = [a for a in (res.get("actions") or []) if (a.get("status") or "").lower() in TRADE_STATUSES]
             if trades:
-                self.send(self.format_trade_alert(trades, loop_count=eng.state.loop_count), reply_markup=self._kb())
+                snap = eng.snapshot()
+                self.send(self.format_trade_alert(trades, loop_count=eng.state.loop_count, snapshot=snap), reply_markup=self._kb())
             else:
                 self.send("tick done — no trades", reply_markup=self._kb())
         elif cmd == "/health":
@@ -1002,6 +1272,118 @@ class TelegramReporter:
             except Exception:
                 log.exception("bg")
             self._stop.wait(20)
+
+    # ── status formatters ─────────────────────────────────────────────────
+    def format_status(self, snap: dict) -> str:
+        cfg = snap.get("config") or {}
+        acct = snap.get("account") or {}
+        usdc = acct.get("USDC") or {}
+        assets = cfg.get("assets") or []
+        pos = snap.get("positions") or []
+        st = self.stats
+        fin = snap.get("financial") or {}
+        lines = [
+            f"📊 <b>وضعیت SUPER</b>",
+            f"🕐 {utcnow()}",
+            f"",
+            f"{'🟢 RUNNING' if snap.get('running') else '🔴 STOPPED'} · <b>{_esc(snap.get('mode'))}</b>",
+            f"loops: <code>{_esc(snap.get('loop_count'))}</code>",
+            f"last: <code>{_esc(snap.get('last_loop_at'))}</code>",
+            f"error: <code>{_esc(snap.get('last_error') or 'none')}</code>",
+            f"",
+            f"<b>سرمایه/ریسک</b>",
+            f"تخصیصی ربات: ${_esc(cfg.get('capital_usd'))} · lev≤{_esc(cfg.get('lev_cap'))}",
+            f"برآورد موجودی ربات: ${_f(snap.get('risk', {}).get('estimated_bot_equity'))}",
+            f"حساب USDC eq=<code>{_esc(usdc.get('equity'))}</code> avail=<code>{_esc(usdc.get('available'))}</code>",
+            f"پوزیشن باز: <b>{len(pos)}</b>",
+            f"",
+            f"<b>آمار سفارش</b> ✅{st['orders_ok']} ⏭{st['orders_skip']} ❌{st['orders_err']}",
+            f"alerts: {st['trades_alerted']} · files: {st['files_sent']}",
+        ]
+        if fin:
+            lines.extend([
+                f"",
+                f"<b>گزارش مالی (۶ساعت اخیر)</b>",
+                f"معاملات: {fin.get('execution_count', 0)} · بسته‌شده: {fin.get('closed_event_count', 0)}",
+                f"سود/زیان بسته‌شده تأییدشده: {_f(fin.get('verified_closed_net_usdc'))} USDC",
+                f"کارمزد دوره: {_f(fin.get('period_fees_usdc'))} USDC",
+                f"غیرمحقق: {_f(fin.get('unrealized_gross_usdc'))} USDC",
+            ])
+        dg = snap.get("diagnostics") or {}
+        lines.extend([
+            "", "<b>آمادگی واقعی معامله</b>",
+            f"state=<code>{_esc(dg.get('trading_state'))}</code> · blocker=<code>{_esc(dg.get('primary_blocker') or 'none')}</code>",
+            f"بازار باز {dg.get('market_open_count', 0)}/{len(assets)} · halted={dg.get('market_halted_count', 0)}",
+            f"نماد دارای سیگنال: {dg.get('active_signal_assets', 0)} · fill تأییدشده: {dg.get('confirmed_fill_count', 0)}",
+            f"آخرین fill: {_esc(snap.get('last_fill_at') or 'none')}",
+        ])
+        if self.dashboard_url:
+            lines.append(f"Web: {_esc(self.dashboard_url)}")
+        return "\n".join(lines)
+
+    def test_confirmation(self):
+        if not self._engine:
+            self.send("موتور در دسترس نیست.")
+            return
+        if self._engine.test_trader.is_active():
+            self.send(self.format_test_trade(self._engine.test_trader.snapshot()), reply_markup=self._kb())
+            return
+        settings = self._engine.settings
+        self.send(
+            f"🧪 <b>تأیید معامله تست — فقط پول آزمایشی</b>\n"
+            f"نماد: <b>{_esc(settings.test_trade_asset.upper())} USDC perpetual</b>\n"
+            f"حجم: کوچک‌ترین لات معتبر صرافی، حداکثر ${_f(settings.test_trade_max_notional_usd)}\n"
+            f"خروج: <b>۶۰ ثانیه پس از پرشدن ورود</b>، فقط reduce-only.\n"
+            f"در این مدت سفارش‌های پنج استراتژی موقتاً متوقف می‌شوند.\n"
+            f"پوزیشن قبلی روی نماد تست مجاز نیست. توقف صرافی یا قطع سرویس می‌تواند خروج را به تأخیر بیندازد.\n\n"
+            f"برای ارسال سفارش واقعی تست‌نت، تأیید کنید:",
+            reply_markup={"inline_keyboard": [
+                [{"text": "✅ تأیید و شروع تست ۶۰ثانیه", "callback_data": "panel:testconfirm"}],
+                [{"text": "انصراف / پنل", "callback_data": "panel:home"}],
+            ]},
+        )
+
+    def format_test_trade(self, state: dict) -> str:
+        entry = state.get("entry") or {}
+        exits = state.get("exits") or []
+        return (
+            f"⏱ <b>وضعیت معامله تست</b>\n"
+            f"state=<code>{_esc(state.get('status'))}</code> · active={_esc(state.get('active'))}\n"
+            f"نماد: {_esc(state.get('instrument'))}\n"
+            f"ورود پرشده: {_f(state.get('entry_filled_amount'), 6)}\n"
+            f"خروج پرشده: {_f(state.get('exit_filled_amount'), 6)}\n"
+            f"زمان ورود: {_esc(state.get('opened_at'))}\n"
+            f"زمان برنامه‌ریزی خروج: {_esc(state.get('close_due_at'))}\n"
+            f"زمان بسته‌شدن: {_esc(state.get('closed_at'))}\n"
+            f"باقی‌مانده تا خروج: {_f(state.get('seconds_remaining'), 0)} ثانیه\n"
+            f"order ورود: <code>{_esc(entry.get('order_id'))}</code>\n"
+            f"order خروج: <code>{_esc(', '.join(str(x.get('order_id')) for x in exits if x.get('order_id')) or 'none')}</code>\n"
+            f"{_esc(state.get('warning') or state.get('reason') or '')}"
+        )
+
+    def on_test_trade(self, event: str, state: dict):
+        if not self.enabled:
+            return
+        heads = {
+            "opened": "🧪 معامله تست باز شد", "opened_reconciled": "🧪 ورود تست با صرافی تطبیق داده شد",
+            "closed": "✅ خروج معامله تست تأیید شد", "closed_external": "ℹ️ حساب بدون long تست است؛ خروج تایمر ثبت نشد",
+            "recovered": "↩️ تست نیمه‌تمام از برچسب صرافی بازیابی شد",
+            "unfilled": "⏸ ورود تست پر نشد؛ معامله ایجاد نشد", "failed": "❌ سفارش تست رد شد",
+            "uncertain": "🚨 نتیجه سفارش تست نامشخص است", "warning": "🚨 خروج/وضعیت تست نیازمند توجه است",
+        }
+        for phase, receipts in (("entry", [state.get("entry") or {}]), ("exit", state.get("exits") or [])):
+            for receipt in receipts:
+                order_id = receipt.get("order_id")
+                if not order_id or not receipt.get("filled_amount") or order_id in self._test_alerted_ids:
+                    continue
+                self._test_alerted_ids.add(order_id)
+                self.stats["orders_ok"] += 1
+                self.journal.append({"ts": utcnow(), "asset": state.get("asset"), "status": "test_"+phase,
+                                     "amount": receipt.get("filled_amount"), "price": receipt.get("average_price"),
+                                     "notional_usd": float(receipt.get("filled_amount") or 0)*float(receipt.get("average_price") or 0),
+                                     "order_id": order_id, "pnl": None})
+                self.journal = self.journal[-500:]
+        self.send(f"<b>{_esc(heads.get(event, event))}</b>\n{self.format_test_trade(state)}", reply_markup=self._kb())
 
 
 _reporter: Optional[TelegramReporter] = None
