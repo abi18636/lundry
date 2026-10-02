@@ -75,7 +75,12 @@ class TimedTestTrade:
         self.engine.notify_test_trade(event, self.snapshot())
 
     def _warn(self, code, reason):
-        if code != self._last_warning_code or self.clock()-self._last_warning >= 300:
+        # For recovery_check, use longer cooldown and never spam when no active trade
+        cooldown = 3600 if code == "recovery_check" else 300
+        if code == "recovery_check" and not self.is_active():
+            # Silent recovery failure - don't spam telegram
+            return
+        if code != self._last_warning_code or self.clock()-self._last_warning >= cooldown:
             self._last_warning_code, self._last_warning = code, self.clock()
             self._set(warning_code=code, warning=reason)
             self._notify("warning")
@@ -521,7 +526,14 @@ class TimedTestTrade:
         except Exception as exc:
             self._recovery_retry_at = self.clock()+30
             self._set(status="recovery_blocked", recovery_error=str(exc), recovery_retry_at=iso(self._recovery_retry_at))
-            self._warn("recovery_check", "مالکیت تست روی نماد منتخب هنوز تأیید نشده؛ فقط همان نماد موقتاً مسدود است.")
+            # Fix: don't spam telegram for recovery_blocked when no active test
+            # User reported this warning as useless spam with all — fields
+            if self.is_active():
+                self._warn("recovery_check", "مالکیت تست روی نماد منتخب هنوز تأیید نشده؛ فقط همان نماد موقتاً مسدود است.")
+            else:
+                # Silent - just update last_warning to prevent immediate retry spam, no telegram
+                self._last_warning_code = "recovery_check"
+                self._last_warning = self.clock()
             self.engine.request_cycle()
         finally:
             self.engine._cycle_lock.release()

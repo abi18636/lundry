@@ -1357,6 +1357,20 @@ class TelegramReporter:
         )
 
     def format_test_trade(self, state: dict) -> str:
+        status = str(state.get("status") or "")
+        active = bool(state.get("active"))
+        # Special handling for idle/recovery_blocked with no active trade — show meaningful message
+        if not active and status in ("recovery_blocked", "idle", "blocked", ""):
+            asset = state.get("asset") or state.get("instrument") or "—"
+            reason = state.get("recovery_error") or state.get("reason") or state.get("warning") or "هیچ تست فعالی وجود ندارد"
+            return (
+                f"⏱ <b>وضعیت معامله تست</b>\n"
+                f"وضعیت: <code>{_esc(status or 'idle')}</code> · فعال: {_esc(active)}\n"
+                f"نماد: {_esc(asset)}\n"
+                f"ℹ️ { _esc(reason) }\n"
+                f"💡 برای شروع تست جدید از دکمه «🧪 تست ۶۰ثانیه» استفاده کنید.\n"
+                f"این پیام فقط هنگام درخواست وضعیت نمایش داده می‌شود و دیگر به صورت خودکار اسپم نمی‌شود."
+            )
         entry = state.get("entry") or {}
         exits = state.get("exits") or []
         return (
@@ -1377,6 +1391,21 @@ class TelegramReporter:
     def on_test_trade(self, event: str, state: dict):
         if not self.enabled:
             return
+        # Suppress meaningless recovery_blocked spam when no active test
+        # User reported: state=recovery_blocked active=False with all — is useless
+        if event == "warning":
+            status = str(state.get("status") or "")
+            active = bool(state.get("active"))
+            warning_code = str(state.get("warning_code") or "")
+            # If it's just recovery check with no active trade, don't spam telegram
+            if not active and status in ("recovery_blocked", "idle", "blocked"):
+                log.info("suppressing test trade warning spam: status=%s active=%s code=%s", status, active, warning_code)
+                return
+            # Also suppress if warning_code is recovery_check and no active trade
+            if not active and warning_code == "recovery_check":
+                log.info("suppressing recovery_check warning with no active trade")
+                return
+
         heads = {
             "opened": "🧪 معامله تست باز شد", "opened_reconciled": "🧪 ورود تست با صرافی تطبیق داده شد",
             "closed": "✅ خروج معامله تست تأیید شد", "closed_external": "ℹ️ حساب بدون long تست است؛ خروج تایمر ثبت نشد",
