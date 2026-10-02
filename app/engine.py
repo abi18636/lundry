@@ -577,8 +577,31 @@ class TradingEngine:
                                 "errors": [],
                                 "note": "illiquid_close",
                             }
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            # Fallback: try market close via close_position for illiquid assets
+                            # This is more aggressive but necessary to clean up losing positions
+                            try:
+                                # Only try market close if we have a position and it's not too small
+                                if abs(qty) > 1e-12:
+                                    result = c.close_position(inst)
+                                    fill = fill_summary(result)
+                                    if fill["filled_amount"] > 0:
+                                        close_action = {
+                                            "asset": inst.split("_")[0],
+                                            "instrument": inst,
+                                            "status": "closed",
+                                            "amount": fill["filled_amount"],
+                                            "price": fill.get("average_price"),
+                                            "notional_usd": fill["filled_amount"] * float(fill.get("average_price") or 0),
+                                            "order_id": fill.get("order_id"),
+                                            "filled_amount": fill["filled_amount"],
+                                            "reason": f"Market closed illiquid {inst} via close_position API",
+                                        }
+                                        self._log_fill(close_action)
+                                        # Update inventory
+                                        inventory[inst] = 0.0
+                            except Exception:
+                                pass
                 except Exception:
                     pass
             except Exception:
