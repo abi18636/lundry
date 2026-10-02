@@ -16,7 +16,7 @@ services:
       - key: DRY_RUN
         value: "false"
       - key: CAPITAL_USD
-        value: "100"
+        value: "400"
       - key: LEV_CAP
         value: "1.0"
       - key: LONG_ONLY
@@ -30,7 +30,7 @@ services:
       - key: LOOP_SECONDS
         value: "90"
       - key: MAX_NOTIONAL_USD
-        value: "100"
+        value: "400"
       - key: MIN_NOTIONAL_USD
         value: "10"
       - key: CANDLE_LOOKBACK_HOURS

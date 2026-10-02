@@ -18,8 +18,8 @@ class Settings(BaseSettings):
     trading_enabled: bool = True
     dry_run: bool = False
 
-    # SUPER BOT total capital across independent sleeves
-    capital_usd: float = Field(default=100.0, gt=0)
+    # SUPER BOT total capital across independent sleeves — increased to 400 for more transparent P&L/fees
+    capital_usd: float = Field(default=400.0, gt=0)
     lev_cap: float = Field(default=1.0, gt=0, le=1.0)
     long_only: bool = True
     assets: str = "BTC,ETH,SOL,XRP,DOGE,BNB,ADA,AVAX,LINK,DOT,LTC,BCH,UNI,ATOM,NEAR,APT,ARB,OP,SUI,FIL,INJ,SEI,WLD,TRX,TAO"
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     strategy_profile: str = "super"
 
     loop_seconds: int = 60
-    max_notional_usd: float = 100.0  # engine also caps at allocated equity * lev_cap
+    max_notional_usd: float = 400.0  # engine also caps at allocated equity * lev_cap — increased to match capital 400
     min_notional_usd: float = 10.0  # legacy only; NEVER forces target size upward
     rebalance_notional_usd: float = Field(default=1.0, ge=0)
     market_data_max_age_seconds: int = Field(default=180, ge=10)
