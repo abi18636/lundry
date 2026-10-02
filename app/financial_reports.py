@@ -288,6 +288,41 @@ class FinancialJournal:
                             kind = "reverse"
                             # remaining flips side
                             b.update(avg=price, fee=(fee * (abs(q_after) / amt) if fee is not None else ZERO), fee_known=fee is not None, q=q_after, basis="execution_fills")
+                    # Funding: sum interest_pl from transaction log matching trade_ids or instrument+time
+                    funding = ZERO
+                    funding_known = True
+                    try:
+                        # Match via trade_id if available
+                        tids = set(o.get("trade_ids") or [])
+                        if tids:
+                            for tx in self.data.get("transactions", {}).values():
+                                if tx.get("trade_id") in tids and tx.get("instrument_name") == inst:
+                                    ip = dec(tx.get("interest_pl"))
+                                    if ip is not None:
+                                        funding += ip
+                                    else:
+                                        # If any matching tx has no interest_pl field, we don't know funding
+                                        if tx.get("interest_pl") is None and "interest_pl" not in tx:
+                                            funding_known = False
+                        else:
+                            # No trade_ids, try to find funding for instrument around event time (within 1h)
+                            # This is best-effort, funding may stay unknown
+                            funding_known = False
+                    except Exception:
+                        funding_known = False
+
+                    # Net final = price+fees + funding (if known)
+                    net_final = None
+                    funding_val = None
+                    if pnl_fee is not None:
+                        if funding_known:
+                            net_final = pnl_fee + funding
+                            funding_val = funding
+                        else:
+                            # Funding unknown, keep price+fees only but mark quality
+                            net_final = pnl_fee
+                            funding_val = None
+
                     ev = {
                         **copy.deepcopy(o),
                         "kind": kind,
@@ -303,14 +338,18 @@ class FinancialJournal:
                         "exit_fee_usdc": num(exit_fee),
                         "paid_fee_usdc": num(fee),
                         "net_price_fees_usdc": num(pnl_fee),
-                        "net_final_usdc": num(pnl_fee),  # funding not yet added; kept same for now
+                        "funding_usdc": num(funding_val) if funding_known else None,
+                        "funding_known": funding_known,
+                        "net_final_usdc": num(net_final),
                         "basis_source": b["basis"],
-                        "pnl_quality": "complete" if pnl_fee is not None or kind in ("open", "increase") else "incomplete_entry_or_fee_evidence",
+                        "pnl_quality": "complete" if (pnl_fee is not None and funding_known) or kind in ("open", "increase") else "incomplete_entry_or_fee_or_funding_evidence" if not funding_known else "incomplete_entry_or_fee_evidence",
                         "source": "manual_test" if o.get("test_id") or str(o.get("label") or "").startswith(("zt60e_", "zt60x_")) else "bot" if o.get("owned") else "external/manual",
                     }
                     if closed_q and avg_before is not None and avg_before != 0:
                         entry_basis = closed_q * avg_before
                         ev["return_pct_price_fees"] = num((pnl_fee / entry_basis * Decimal(100)) if pnl_fee is not None else None)
+                        if net_final is not None:
+                            ev["return_pct_final"] = num((net_final / entry_basis * Decimal(100)) if net_final is not None else None)
                     events.append(ev)
                 self._cache_events = events
                 self._cache_rev = self._rev

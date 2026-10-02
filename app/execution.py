@@ -91,11 +91,40 @@ def plan_rebalance(current: float, desired: float, price: float, step: float,
 
 
 def ioc_price(book: dict, direction: str, meta: dict, slippage_bps: float) -> float:
-    """Marketable LIMIT IOC, with an explicit maximum slippage relative to top of book."""
+    """Marketable LIMIT IOC with depth-5 VWAP reference and explicit max slippage.
+
+    Improvement from Execution Agent proposal:
+    - Use VWAP of top 5 levels (not just best) for more realistic reference on low-liquidity testnet
+    - Still respects tick_size and max_price/min_price caps
+    """
     levels = book.get("asks" if direction == "buy" else "bids") or []
     if not levels or not levels[0] or float(levels[0][0]) <= 0:
         raise ValueError("no executable liquidity")
-    reference = Decimal(str(levels[0][0]))
+    # Depth-5 VWAP: more realistic than top-of-book only on thin testnet
+    try:
+        # levels format: [[price, amount], ...]
+        top5 = levels[:5]
+        total_amt = Decimal(0)
+        total_val = Decimal(0)
+        for lvl in top5:
+            if not lvl or len(lvl) < 2:
+                continue
+            px = Decimal(str(lvl[0]))
+            amt = Decimal(str(lvl[1]))
+            if px <= 0 or amt <= 0:
+                continue
+            total_amt += amt
+            total_val += px * amt
+        if total_amt > 0:
+            reference = total_val / total_amt
+        else:
+            # Fallback to simple average of prices if amounts missing
+            prices = [Decimal(str(l[0])) for l in top5 if l and float(l[0]) > 0]
+            reference = sum(prices, Decimal(0)) / Decimal(len(prices)) if prices else Decimal(str(levels[0][0]))
+    except Exception:
+        reference = Decimal(str(levels[0][0]))
+    if reference <= 0:
+        raise ValueError("invalid reference price from order book")
     sign = 1 if direction == "buy" else -1
     bound = reference * (Decimal(1) + sign * Decimal(str(slippage_bps)) / Decimal(10000))
     tick = Decimal(str(meta.get("tick_size") or 0))

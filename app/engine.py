@@ -88,19 +88,41 @@ class TradingEngine:
         self.financial = FinancialReporting(self)
 
     def _restore(self):
-        try:
-            saved = json.loads(Path(self.settings.state_path).read_text())
-            # Never restore a stale position/account snapshot as current inventory.
+        def _apply_saved(saved: dict):
             self.state.risk = saved.get("risk") or {}
             self.state.pending_order = saved.get("pending_order")
             self.state.orders_log = (saved.get("orders_log") or [])[-300:]
             self.state.last_fill_at = saved.get("last_fill_at")
             self.state.ops_reviews = (saved.get("ops_reviews") or [])[-24:]
             self.state.test_trade = saved.get("test_trade") or self.state.test_trade
+
+        # Try local file first
+        try:
+            saved = json.loads(Path(self.settings.state_path).read_text())
+            _apply_saved(saved)
+            return
         except FileNotFoundError:
             pass
         except Exception as exc:
             self.state.push("warning", f"state restore unavailable: {type(exc).__name__}")
+
+        # Fallback: try external backup URL if configured (GET)
+        backup_url = getattr(self.settings, "external_state_backup_url", "") or os.getenv("EXTERNAL_STATE_BACKUP_URL", "")
+        if backup_url:
+            try:
+                import httpx
+                r = httpx.get(backup_url, timeout=8)
+                if r.status_code == 200:
+                    saved = r.json()
+                    _apply_saved(saved)
+                    # Save locally for next boot
+                    Path(self.settings.state_path).parent.mkdir(parents=True, exist_ok=True)
+                    Path(self.settings.state_path).write_text(json.dumps(saved, ensure_ascii=False, indent=2, default=str))
+                    self.state.push("info", "state restored from external backup URL")
+            except Exception as exc:
+                self.state.push("warning", f"external backup restore failed: {type(exc).__name__}")
+
+        # No state found — fresh start
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -181,6 +203,21 @@ class TradingEngine:
                 temp = path.with_suffix(".tmp")
                 temp.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2, default=str))
                 os.replace(temp, path)
+
+                # External backup if configured (best-effort, never blocks trading)
+                backup_url = getattr(self.settings, "external_state_backup_url", "") or os.getenv("EXTERNAL_STATE_BACKUP_URL", "")
+                if backup_url:
+                    try:
+                        import httpx, threading
+                        data = json.dumps(snapshot, ensure_ascii=False, default=str)
+                        def _post():
+                            try:
+                                httpx.post(backup_url, content=data, headers={"Content-Type": "application/json"}, timeout=10)
+                            except Exception:
+                                pass
+                        threading.Thread(target=_post, name="state-backup", daemon=True).start()
+                    except Exception:
+                        pass
             except Exception as exc:
                 log.warning("state save failed: %s", type(exc).__name__)
 

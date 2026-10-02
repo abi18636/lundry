@@ -22,7 +22,7 @@ services:
       - key: LONG_ONLY
         value: "true"
       - key: ASSETS
-        value: BTC,ETH,SOL,XRP,DOGE,BNB,ADA,AVAX,LINK,DOT,LTC,BCH,UNI,ATOM,NEAR,APT,ARB,OP,SUI,FIL,INJ,SEI,WLD,TRX,TAO
+        value: BTC,ETH,SOL,DOGE,AVAX,APT,TRX
       - key: SLEEVE_WEIGHTS
         value: "zenith_apex:0.25,almasi_primary:0.25,inst_v3_stable:0.30,inst_v3_primary:0.10,zenith_endurance:0.10"
       - key: SLEEVES_ENABLED
@@ -40,13 +40,13 @@ services:
       - key: TELEGRAM_FULL_REPORT_HOURS
         value: "6"
       - key: REBALANCE_NOTIONAL_USD
-        value: "1"
+        value: "0.5"
       - key: MARKET_DATA_MAX_AGE_SECONDS
         value: "180"
       - key: MAX_SPREAD_BPS
-        value: "100"
+        value: "200"
       - key: MAX_SLIPPAGE_BPS
-        value: "50"
+        value: "100"
       - key: MAX_DRAWDOWN_PCT
         value: "0.15"
       - key: OPS_REVIEW_SECONDS

@@ -22,7 +22,8 @@ class Settings(BaseSettings):
     capital_usd: float = Field(default=400.0, gt=0)
     lev_cap: float = Field(default=1.0, gt=0, le=1.0)
     long_only: bool = True
-    assets: str = "BTC,ETH,SOL,XRP,DOGE,BNB,ADA,AVAX,LINK,DOT,LTC,BCH,UNI,ATOM,NEAR,APT,ARB,OP,SUI,FIL,INJ,SEI,WLD,TRX,TAO"
+    # Blacklisted to 7 liquid assets on Deribit testnet (Data Agent finding: only 7/25 have two-sided liquidity)
+    assets: str = "BTC,ETH,SOL,DOGE,AVAX,APT,TRX"
 
     # Sleeve weights — independent DNA, no mixing
     # Format: id:weight,id:weight,...
@@ -38,11 +39,12 @@ class Settings(BaseSettings):
     loop_seconds: int = 60
     max_notional_usd: float = 400.0  # engine also caps at allocated equity * lev_cap — increased to match capital 400
     min_notional_usd: float = 10.0  # legacy only; NEVER forces target size upward
-    rebalance_notional_usd: float = Field(default=1.0, ge=0)
+    # Execution tuning for testnet low liquidity (Execution Agent)
+    rebalance_notional_usd: float = Field(default=0.5, ge=0)  # reduced from 1.0 to 0.5 for less skip_small
     market_data_max_age_seconds: int = Field(default=180, ge=10)
     max_signal_no_trade_hours: float = Field(default=6.0, gt=0)
-    max_spread_bps: float = Field(default=100.0, gt=0)
-    max_slippage_bps: float = Field(default=50.0, ge=0, le=100)
+    max_spread_bps: float = Field(default=200.0, gt=0)  # increased from 100 to 200 for testnet wide spreads
+    max_slippage_bps: float = Field(default=100.0, ge=0, le=200)  # increased from 50 to 100 for testnet slippage
     max_drawdown_pct: float = Field(default=0.15, gt=0, le=0.15)
     ops_review_seconds: int = Field(default=3600, ge=60)
     allow_mainnet_trading: bool = False
@@ -50,6 +52,7 @@ class Settings(BaseSettings):
     dashboard_token: str = ""
     log_level: str = "INFO"
     state_path: str = "state/bot_state.json"
+    external_state_backup_url: str = ""  # optional external backup webhook/storage URL for free-tier ephemeral FS
     use_usdc_linear: bool = True
 
     # Owner-confirmed manual minimum-lot test; testnet only, never a strategy signal.
