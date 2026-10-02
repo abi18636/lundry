@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     lev_cap: float = Field(default=1.0, gt=0, le=1.0)
     long_only: bool = True
     # Blacklisted to 7 liquid assets on Deribit testnet (Data Agent finding: only 7/25 have two-sided liquidity)
+    # Enforced to 7 liquid regardless of env override to prevent trading illiquid assets
     assets: str = "BTC,ETH,SOL,DOGE,AVAX,APT,TRX"
 
     # Sleeve weights — independent DNA, no mixing
@@ -39,8 +40,8 @@ class Settings(BaseSettings):
     loop_seconds: int = 60
     max_notional_usd: float = 400.0  # engine also caps at allocated equity * lev_cap — increased to match capital 400
     min_notional_usd: float = 10.0  # legacy only; NEVER forces target size upward
-    # Execution tuning for testnet low liquidity (Execution Agent)
-    rebalance_notional_usd: float = Field(default=0.5, ge=0)  # reduced from 1.0 to 0.5 for less skip_small
+    # Execution tuning for testnet low liquidity (Execution Agent) — increased rebalance to reduce overtrading
+    rebalance_notional_usd: float = Field(default=2.0, ge=0)  # increased from 0.5 to 2.0 to avoid tiny fee-dominated trades
     market_data_max_age_seconds: int = Field(default=180, ge=10)
     max_signal_no_trade_hours: float = Field(default=6.0, gt=0)
     max_spread_bps: float = Field(default=200.0, gt=0)  # increased from 100 to 200 for testnet wide spreads
@@ -56,8 +57,9 @@ class Settings(BaseSettings):
     use_usdc_linear: bool = True
 
     # Owner-confirmed manual minimum-lot test; testnet only, never a strategy signal.
-    test_trade_enabled: bool = True
-    test_trade_asset: str = "BTC"
+    # Disabled by default to prevent blocking BTC (most liquid asset) during recovery
+    test_trade_enabled: bool = False
+    test_trade_asset: str = "XRP"  # Changed from BTC to XRP to avoid blocking BTC trades
     test_trade_hold_seconds: int = Field(default=60, ge=60, le=60)
     test_trade_max_notional_usd: float = Field(default=10.0, gt=0, le=10.0)
     telegram_bot_username: str = "TestTraid_bot"
@@ -92,7 +94,19 @@ class Settings(BaseSettings):
 
     @property
     def asset_list(self) -> List[str]:
-        return list(dict.fromkeys(a.strip().upper() for a in self.assets.split(",") if a.strip()))
+        # Enforce 7 liquid assets to prevent trading illiquid assets that cause losses
+        # Data Agent finding: only 7/25 have two-sided liquidity on Deribit testnet
+        LIQUID_7 = ["BTC", "ETH", "SOL", "DOGE", "AVAX", "APT", "TRX"]
+        raw = list(dict.fromkeys(a.strip().upper() for a in self.assets.split(",") if a.strip()))
+        # If env var contains illiquid assets or more than 7, force to liquid 7 and log
+        if len(raw) > 7 or any(a not in LIQUID_7 for a in raw):
+            # Filter to only liquid that are in raw, but if raw is 25, use LIQUID_7
+            if len(raw) >= 10:  # Likely old 25 asset list
+                return LIQUID_7
+            # Otherwise, filter raw to only liquid
+            filtered = [a for a in raw if a in LIQUID_7]
+            return filtered if filtered else LIQUID_7
+        return raw
 
     @property
     def enabled_sleeves(self) -> List[str]:

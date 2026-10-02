@@ -28,7 +28,7 @@ services:
       - key: SLEEVES_ENABLED
         value: "zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance"
       - key: LOOP_SECONDS
-        value: "90"
+        value: "120"
       - key: MAX_NOTIONAL_USD
         value: "400"
       - key: MIN_NOTIONAL_USD
@@ -40,7 +40,7 @@ services:
       - key: TELEGRAM_FULL_REPORT_HOURS
         value: "6"
       - key: REBALANCE_NOTIONAL_USD
-        value: "0.5"
+        value: "2.0"
       - key: MARKET_DATA_MAX_AGE_SECONDS
         value: "180"
       - key: MAX_SPREAD_BPS
@@ -60,9 +60,9 @@ services:
       - key: REPORT_HISTORY_HOURS
         value: "168"
       - key: TEST_TRADE_ENABLED
-        value: "true"
+        value: "false"
       - key: TEST_TRADE_ASSET
-        value: "BTC"
+        value: "XRP"
       - key: TEST_TRADE_HOLD_SECONDS
         value: "60"
       - key: TEST_TRADE_MAX_NOTIONAL_USD

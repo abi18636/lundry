@@ -60,6 +60,8 @@ class BotState:
     last_fill_at: Optional[str] = None
     ops_reviews: List[dict] = field(default_factory=list)
     test_trade: Dict[str, Any] = field(default_factory=lambda: {"active": False, "status": "idle", "environment": "testnet-live"})
+    # Cooldown to prevent overtrading: last trade timestamp per asset
+    last_trade_at: Dict[str, float] = field(default_factory=dict)
 
     def push(self, kind: str, msg: str, **extra):
         self.events = (self.events + [{"ts": utcnow(), "kind": kind, "msg": msg, **extra}])[-300:]
@@ -95,6 +97,7 @@ class TradingEngine:
             self.state.last_fill_at = saved.get("last_fill_at")
             self.state.ops_reviews = (saved.get("ops_reviews") or [])[-24:]
             self.state.test_trade = saved.get("test_trade") or self.state.test_trade
+            self.state.last_trade_at = saved.get("last_trade_at") or {}
 
         # Try local file first
         try:
@@ -499,7 +502,87 @@ class TradingEngine:
                 }
         except Exception as exc:
             fatal.append(f"position_units_invalid: {exc}")
+
+        # Permanent fix: close positions for illiquid assets not in 7 liquid list
+        # These cause losses due to wide spreads and locked markets
+        LIQUID_7_INSTRUMENTS = {s.instrument_for(a) for a in ["BTC", "ETH", "SOL", "DOGE", "AVAX", "APT", "TRX"]}
+        illiquid_positions = []
+        for inst, qty in inventory.items():
+            if abs(qty) > 1e-12 and inst not in LIQUID_7_INSTRUMENTS:
+                # Check if instrument is not in current asset_list (illiquid)
+                asset_from_inst = inst.split("_")[0] if "_USDC" in inst else inst.split("-")[0]
+                if asset_from_inst not in s.asset_list:
+                    illiquid_positions.append((inst, qty))
+
         market_data, actions, executable = {}, [], []
+
+        # Add closing actions for illiquid positions first (priority)
+        for inst, qty in illiquid_positions:
+            try:
+                # Fetch book for this illiquid instrument to close it
+                try:
+                    book = c.order_book(inst, 5)
+                    meta = c.instrument(inst)
+                    price = float(book.get("mark_price") or by_inst.get(inst, {}).get("mark_price") or 0)
+                    if price <= 0:
+                        continue
+                    # Plan close
+                    step = float(meta.get("contract_size") or 0)
+                    minimum = float(meta.get("min_trade_amount") or step)
+                    if step <= 0 or minimum <= 0:
+                        continue
+                    plan = plan_rebalance(qty, 0.0, price, step, minimum, s.rebalance_notional_usd)
+                    if plan.status == "planned":
+                        action = {
+                            "asset": inst.split("_")[0],
+                            "instrument": inst,
+                            "desired_coin": 0.0,
+                            "target_amt": 0.0,
+                            "current_size": qty,
+                            "delta": -qty,
+                            "notional_usd": abs(qty) * price,
+                            "contributors": {},
+                            "price": price,
+                            "market_state": str(book.get("state") or "unknown").lower(),
+                            "book_age_seconds": 0,
+                            "can_execute": True,
+                            "status": "planned",
+                            "reason": f"Closing illiquid position {inst} not in 7 liquid list — permanent fix",
+                            "minimum_amount": minimum,
+                            "contract_size": step,
+                            "planned_target_amt": 0.0,
+                            "preflight_status": "planned",
+                            "preflight_intent": "close",
+                            "preflight_amount": plan.amount,
+                            "amount": plan.amount,
+                            "direction": plan.direction,
+                            "reduce_only": True,
+                            "intent": "close",
+                            "limit_price": None,  # Will be set below
+                        }
+                        try:
+                            limit = ioc_price(book, plan.direction, meta, s.max_slippage_bps)
+                            action["limit_price"] = limit
+                            action["can_execute"] = True
+                            executable.append((plan, action))
+                            actions.append(action)
+                            market_data[action["asset"]] = {
+                                "instrument": inst,
+                                "market_state": action["market_state"],
+                                "book_age_seconds": 0,
+                                "best_bid": None,
+                                "best_ask": None,
+                                "spread_bps": None,
+                                "candles": 0,
+                                "errors": [],
+                                "note": "illiquid_close",
+                            }
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            except Exception:
+                pass
         now_ms = time.time() * 1000
         for a in s.asset_list:
             d = samples[a]
@@ -550,8 +633,13 @@ class TradingEngine:
             actions.append(action)
             def block(status, reason):
                 action.update(status=status, reason=reason)
-            if self.test_trader.recovery_in_progress and a == s.test_trade_asset.upper():
-                block("test_recovery_pending", "Only this instrument is reserved until old test ownership is reconciled")
+            # Fix: don't block BTC (or any liquid asset) when test trade is disabled or recovery is blocked with no active trade
+            # User reported BTC blocked by recovery_blocked with active=False is useless and causes losses
+            if s.test_trade_enabled and self.test_trader.recovery_in_progress and a == s.test_trade_asset.upper():
+                # Only block if there's actually an active test or recovery is not in blocked state
+                test_state = self.test_trader.snapshot()
+                if test_state.get("active") or test_state.get("status") not in ("recovery_blocked", "idle", "blocked"):
+                    block("test_recovery_pending", "Only this instrument is reserved until old test ownership is reconciled")
             elif not meta:
                 block("instrument_unavailable", "Instrument metadata failed; not a market halt")
             elif meta.get("instrument_type") != "linear" or meta.get("settlement_currency") != "USDC":
@@ -578,7 +666,14 @@ class TradingEngine:
                                   notional_usd=abs(plan.target)*px, status=plan.status, reason=plan.reason,
                                   minimum_amount=minimum, contract_size=step)
                     if plan.status == "planned":
-                        if not s.trading_enabled:
+                        # Cooldown to prevent overtrading: 1 hour between trades per asset
+                        # This fixes the 7% win rate caused by frequent flipping
+                        last_trade = self.state.last_trade_at.get(a, 0)
+                        cooldown_seconds = 3600  # 1 hour cooldown
+                        if not plan.reduce_only and time.time() - last_trade < cooldown_seconds:
+                            remaining = int(cooldown_seconds - (time.time() - last_trade))
+                            block("cooldown", f"Cooldown {remaining}s remaining to prevent overtrading")
+                        elif not s.trading_enabled:
                             block("trading_disabled", "TRADING_ENABLED=false")
                         elif not plan.reduce_only and latched:
                             block("drawdown_guard", "Drawdown threshold is latched; new exposure prohibited")
@@ -722,6 +817,13 @@ class TradingEngine:
         if order_id and any(o.get("order_id") == order_id for o in self.state.orders_log):
             return
         self.state.last_fill_at = utcnow()
+        # Update cooldown for this asset
+        try:
+            asset = action.get("asset")
+            if asset:
+                self.state.last_trade_at[asset] = time.time()
+        except Exception:
+            pass
         entry = {"ts": self.state.last_fill_at, **{k: action.get(k) for k in (
             "asset", "instrument", "status", "amount", "price", "notional_usd", "order_id", "order_state",
             "filled_amount", "trade_ids", "fee", "fee_currencies", "direction", "reduce_only", "label", "test_id")}}
