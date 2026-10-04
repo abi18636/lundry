@@ -40,8 +40,8 @@ class Settings(BaseSettings):
     loop_seconds: int = 60
     max_notional_usd: float = 400.0  # engine also caps at allocated equity * lev_cap — increased to match capital 400
     min_notional_usd: float = 10.0  # legacy only; NEVER forces target size upward
-    # Execution tuning for testnet low liquidity (Execution Agent) — increased rebalance to reduce overtrading
-    rebalance_notional_usd: float = Field(default=2.0, ge=0)  # increased from 0.5 to 2.0 to avoid tiny fee-dominated trades
+    # Execution tuning - balanced to allow trades but avoid fee-dominated tiny trades
+    rebalance_notional_usd: float = Field(default=1.0, ge=0)  # balanced: 0.5 caused overtrading, 2.0 caused no trades, 1.0 is middle
     market_data_max_age_seconds: int = Field(default=180, ge=10)
     max_signal_no_trade_hours: float = Field(default=6.0, gt=0)
     max_spread_bps: float = Field(default=200.0, gt=0)  # increased from 100 to 200 for testnet wide spreads

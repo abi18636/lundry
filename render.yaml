@@ -40,7 +40,7 @@ services:
       - key: TELEGRAM_FULL_REPORT_HOURS
         value: "6"
       - key: REBALANCE_NOTIONAL_USD
-        value: "2.0"
+        value: "1.0"
       - key: MARKET_DATA_MAX_AGE_SECONDS
         value: "180"
       - key: MAX_SPREAD_BPS
