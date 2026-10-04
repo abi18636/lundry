@@ -194,11 +194,11 @@ def sleeve_zenith_apex(frames: Dict[str, pd.DataFrame], capital: float, lev_cap:
     compress_frames = {a: frames[a] for a in assets if len(frames[a]) >= 336}
     impulse_frames = {a: frames[a] for a in assets if len(frames[a]) >= 168}
     cfg_c = dict(kind="compress", tag="compress_A", pct_lo=0.25, break_n=96,
-                 exit_n=48, confirm=3, adx_min=14.0, atr_n=24, pct_n=336,
+                 exit_n=48, confirm=2, adx_min=12.0, atr_n=24, pct_n=336,
                  lag=0, assets=list(compress_frames))
     cfg_i = dict(kind="impulse", tag="impulse_B", impulse_atr=2.8, ema_n=48,
-                 hold_atr_trail=2.2, max_hold=72, confirm=2, adx_min=18.0,
-                 er_min=0.08, lag=0, assets=list(impulse_frames))
+                 hold_atr_trail=2.2, max_hold=72, confirm=1, adx_min=16.0,
+                 er_min=0.05, lag=0, assets=list(impulse_frames))
     sc = zenith_make(cfg_c, compress_frames) if compress_frames else {}
     si = zenith_make(cfg_i, impulse_frames) if impulse_frames else {}
     cs = {a: 1.0 if _last_side(sc.get(a)) > 0 else 0.0 for a in assets}
@@ -233,8 +233,8 @@ def sleeve_almasi_primary(frames: Dict[str, pd.DataFrame], capital: float, lev_c
     tq = {}
     for a in assets:
         tq[a] = (sig_turtle_quality(
-            frames[a], entry_n=504, exit_n=72, adx_min=20.0, er_min=0.12,
-            pullback=False, confirm_bars=3, long_only=True,
+            frames[a], entry_n=504, exit_n=72, adx_min=18.0, er_min=0.10,
+            pullback=False, confirm_bars=2, long_only=True,
         ) if len(frames[a]) >= 506 else pd.Series(0.0, index=frames[a].index))
     # VQ on BTC/ETH only
     vq_assets = [a for a in ("BTC", "ETH") if a in frames]
@@ -286,12 +286,12 @@ def sleeve_inst_v3_stable(frames: Dict[str, pd.DataFrame], capital: float, lev_c
         return res
     fr = {a: frames[a] for a in assets if len(frames[a]) >= 726}
     prim = sig_tsmom_discrete(
-        fr, horizons=(24, 168, 720), vote_min=0.70, confirm=6,
-        adx_min=24.0, er_min=0.12, long_only=True, lag=0, exit_vote=0.15,
+        fr, horizons=(24, 168, 720), vote_min=0.67, confirm=5,
+        adx_min=22.0, er_min=0.10, long_only=True, lag=0, exit_vote=0.20,
     )
     broad = sig_tsmom_discrete(
-        fr, horizons=(24, 168, 720), vote_min=0.55, confirm=6,
-        adx_min=22.0, er_min=0.10, long_only=True, lag=0, exit_vote=0.15,
+        fr, horizons=(24, 168, 720), vote_min=0.50, confirm=5,
+        adx_min=22.0, er_min=0.08, long_only=True, lag=0, exit_vote=0.20,
     )
     cap_p, cap_b = capital * 0.70, capital * 0.30
     sp = {a: (1.0 if _last_side(prim.get(a)) > 0 else 0.0) for a in assets}
@@ -329,8 +329,8 @@ def sleeve_inst_v3_primary(frames: Dict[str, pd.DataFrame], capital: float, lev_
         return res
     fr = {a: frames[a] for a in assets if len(frames[a]) >= 726}
     prim = sig_tsmom_discrete(
-        fr, horizons=(24, 168, 720), vote_min=0.70, confirm=6,
-        adx_min=24.0, er_min=0.12, long_only=True, lag=0, exit_vote=0.15,
+        fr, horizons=(24, 168, 720), vote_min=0.67, confirm=5,
+        adx_min=22.0, er_min=0.10, long_only=True, lag=0, exit_vote=0.20,
     )
     sides = {a: (1.0 if _last_side(prim.get(a)) > 0 else 0.0) for a in assets}
     n_long = max(1, sum(1 for x in sides.values() if x > 0))
@@ -360,7 +360,7 @@ def sleeve_zenith_endurance(frames: Dict[str, pd.DataFrame], capital: float, lev
         return res
     cfg = dict(
         kind="impulse", tag="impulse_B", impulse_atr=2.8, ema_n=48,
-        hold_atr_trail=2.2, max_hold=72, confirm=2, adx_min=18.0, er_min=0.08,
+        hold_atr_trail=2.2, max_hold=72, confirm=1, adx_min=16.0, er_min=0.05,
         ek=zenith_ek(0.12, cd=4, nf=0.40), assets=assets, lag=0,
     )
     sig = zenith_make(cfg, frames)

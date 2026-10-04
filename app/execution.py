@@ -57,7 +57,14 @@ def plan_rebalance(current: float, desired: float, price: float, step: float,
     target = floor_amount(desired, step)
     if abs(target) + 1e-12 < minimum:
         target = 0.0
-    p = RebalancePlan(current=current, desired=desired, target=target, delta=target-current)
+    # Fix floating point error: use Decimal for delta to avoid 0.0006-0.0005=9.999e-05 issue
+    from decimal import Decimal
+    try:
+        delta_dec = Decimal(str(target)) - Decimal(str(current))
+        delta = float(delta_dec)
+    except Exception:
+        delta = target - current
+    p = RebalancePlan(current=current, desired=desired, target=target, delta=delta)
     if abs(p.delta) < step * 1e-8:
         p.status = "no_signal" if target == 0 else "target_reached"
         p.reason = "No active target" if target == 0 else "Position already matches target"
@@ -70,12 +77,17 @@ def plan_rebalance(current: float, desired: float, price: float, step: float,
     if reduction:
         # Reverse in TWO cycles: close and reconcile first, then consider opposite entry.
         raw_amount = abs(current) if target == 0 or reversal else abs(p.delta)
-        p.amount = abs(floor_amount(raw_amount, step))
+        # Add epsilon for floating errors
+        p.amount = abs(floor_amount(raw_amount + 1e-12, step))
         p.direction = "sell" if current > 0 else "buy"
         p.reduce_only = True
         p.intent = "close" if target == 0 or reversal else "reduce"
     else:
-        p.amount = abs(floor_amount(p.delta, step))
+        # Add epsilon for floating errors: 0.00009999 should be treated as 0.0001
+        p.amount = abs(floor_amount(p.delta + 1e-12, step))
+        # If amount is 0 but delta is close to minimum (within 1%), use minimum
+        if p.amount == 0 and abs(p.delta) >= minimum * 0.99:
+            p.amount = minimum
         p.direction = "buy" if p.delta > 0 else "sell"
         p.intent = "open" if current == 0 else "increase"
     if p.amount + 1e-12 < minimum:

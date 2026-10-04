@@ -689,10 +689,10 @@ class TradingEngine:
                                   notional_usd=abs(plan.target)*px, status=plan.status, reason=plan.reason,
                                   minimum_amount=minimum, contract_size=step)
                     if plan.status == "planned":
-                        # Cooldown to prevent overtrading: 30 min between trades per asset (was 1h, caused no trades)
-                        # Balanced to avoid fee-dominated flipping but allow intraday trades
+                        # Cooldown: 15 min to allow intraday but prevent flipping every minute
+                        # Previous 1h and 30min caused no trades after strict filters
                         last_trade = self.state.last_trade_at.get(a, 0)
-                        cooldown_seconds = 1800  # 30 min cooldown (was 3600, too long)
+                        cooldown_seconds = 900  # 15 min cooldown
                         if not plan.reduce_only and time.time() - last_trade < cooldown_seconds:
                             remaining = int(cooldown_seconds - (time.time() - last_trade))
                             block("cooldown", f"Cooldown {remaining}s remaining to prevent overtrading")
