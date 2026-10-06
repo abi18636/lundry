@@ -31,6 +31,17 @@ class Settings(BaseSettings):
     capital_usd: float = Field(default=200.0, gt=0)
     lev_cap: float = Field(default=5.0, gt=0, le=10.0)
     long_only: bool = False  # Futures long & short for 200 USDT
+
+    @property
+    def effective_capital(self) -> float:
+        # Force 200 USDT per user request - ignore env if set to 400
+        return 200.0
+
+    @property
+    def effective_lev_cap(self) -> float:
+        # Force 5x per user request
+        return 5.0
+
     assets: str = "BTC,ETH,SOL,AVAX,LINK"
 
     # Sleeve weights — independent DNA, no mixing
@@ -92,12 +103,17 @@ class Settings(BaseSettings):
 
     @property
     def asset_list(self) -> List[str]:
-        # AriaX 15 liquid perps
-        ARIAX_15 = ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT", "LTC", "BCH", "TRX", "XLM", "AAVE", "UNI"]
+        # User request: futures 200 USDT with 5 most liquid pairs BTC,ETH,SOL,AVAX,LINK
+        # Force top5 regardless of env override to ensure 200 USDT concentrated
+        TOP5 = ["BTC", "ETH", "SOL", "AVAX", "LINK"]
+        # If env var explicitly set to 5 assets, respect it, but for this deployment force TOP5
+        # To allow override, check if user set exactly 5 and includes BTC
         raw = list(dict.fromkeys(a.strip().upper() for a in self.assets.split(",") if a.strip()))
-        # Filter to only supported
-        filtered = [a for a in raw if a in ARIAX_15]
-        return filtered if filtered else ARIAX_15
+        # If raw is exactly TOP5 or 5 assets, use it, else force TOP5 for 200 USDT request
+        if len(raw) == 5 and "BTC" in raw:
+            return raw
+        # For 200 USDT futures request, force TOP5 most liquid
+        return TOP5
 
     @property
     def enabled_sleeves(self) -> List[str]:

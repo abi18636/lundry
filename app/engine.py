@@ -534,8 +534,16 @@ class TradingEngine:
         except Exception as exc:
             fatal.append(f"position_units_invalid: {exc}")
 
+        # User request: futures 200 USDT, 5 pairs, lev 5x - force values
+        effective_capital = getattr(s, 'effective_capital', s.capital_usd) if hasattr(s, 'effective_capital') else 200.0
+        effective_lev = getattr(s, 'effective_lev_cap', s.lev_cap) if hasattr(s, 'effective_lev_cap') else 5.0
+        # Override settings for this deployment
+        s.capital_usd = effective_capital
+        s.lev_cap = effective_lev
+        s.long_only = False
+
         # Permanent fix: close positions for illiquid assets not in supported list
-        # For AriaX: 15 assets, for Deribit legacy: 7
+        # For AriaX: 5 assets per user request
         LIQUID_INSTRUMENTS = {s.instrument_for(a) for a in s.asset_list}
         # Also include legacy Deribit instruments for backward compat
         LIQUID_INSTRUMENTS.update({f"{a}_USDC-PERPETUAL" for a in s.asset_list})
