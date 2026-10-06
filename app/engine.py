@@ -526,114 +526,86 @@ class TradingEngine:
             if abs(qty) <= 1e-12:
                 continue
             closed_via_market = False
-            # Try market close via close_position API first - most reliable for illiquid
-            try:
-                result = c.close_position(inst)
-                fill = fill_summary(result)
-                if fill["filled_amount"] > 0:
-                    close_action = {
-                        "asset": inst.split("_")[0],
-                        "instrument": inst,
-                        "status": "closed",
-                        "amount": fill["filled_amount"],
-                        "price": fill.get("average_price"),
-                        "notional_usd": fill["filled_amount"] * float(fill.get("average_price") or 0),
-                        "order_id": fill.get("order_id"),
-                        "filled_amount": fill["filled_amount"],
-                        "reason": f"Market closed illiquid {inst} via close_position API - permanent fix",
-                        "direction": "sell" if qty > 0 else "buy",
-                        "reduce_only": True,
-                    }
-                    self._log_fill(close_action)
-                    inventory[inst] = 0.0
-                    closed_via_market = True
-                    actions.append({
-                        "asset": inst.split("_")[0],
-                        "instrument": inst,
-                        "desired_coin": 0.0,
-                        "target_amt": 0.0,
-                        "current_size": qty,
-                        "delta": -qty,
-                        "notional_usd": close_action["notional_usd"],
-                        "contributors": {},
-                        "price": close_action["price"] or 0,
-                        "market_state": "closed_via_market",
-                        "can_execute": False,
-                        "status": "closed",
-                        "reason": close_action["reason"],
-                        "filled_amount": fill["filled_amount"],
-                    })
-                    market_data[inst.split("_")[0]] = {
-                        "instrument": inst,
-                        "market_state": "closed",
-                        "book_age_seconds": 0,
-                        "best_bid": None,
-                        "best_ask": None,
-                        "spread_bps": None,
-                        "candles": 0,
-                        "errors": [],
-                        "note": "illiquid_closed_via_market",
-                    }
-                    continue
-                else:
-                    # Even if filled_amount 0, try market order as fallback
-                    log.info(f"close_position returned 0 fill for {inst}, trying market order")
-            except Exception as e:
-                log.warning(f"close_position failed for {inst}: {e}")
-            # Second attempt: direct market order with reduce_only
-            try:
-                if qty > 0:
-                    result = c.sell_market(inst, abs(qty), label=f"close_{inst.split('_')[0].lower()}_illiquid", reduce_only=True)
-                else:
-                    result = c.buy_market(inst, abs(qty), label=f"close_{inst.split('_')[0].lower()}_illiquid", reduce_only=True)
-                fill = fill_summary(result)
-                if fill["filled_amount"] > 0:
-                    close_action = {
-                        "asset": inst.split("_")[0],
-                        "instrument": inst,
-                        "status": "closed",
-                        "amount": fill["filled_amount"],
-                        "price": fill.get("average_price"),
-                        "notional_usd": fill["filled_amount"] * float(fill.get("average_price") or 0),
-                        "order_id": fill.get("order_id"),
-                        "filled_amount": fill["filled_amount"],
-                        "reason": f"Market closed illiquid {inst} via market order - permanent fix",
-                        "direction": "sell" if qty > 0 else "buy",
-                        "reduce_only": True,
-                    }
-                    self._log_fill(close_action)
-                    inventory[inst] = 0.0
-                    closed_via_market = True
-                    actions.append({
-                        "asset": inst.split("_")[0],
-                        "instrument": inst,
-                        "desired_coin": 0.0,
-                        "target_amt": 0.0,
-                        "current_size": qty,
-                        "delta": -qty,
-                        "notional_usd": close_action["notional_usd"],
-                        "contributors": {},
-                        "price": close_action["price"] or 0,
-                        "market_state": "closed_via_market",
-                        "can_execute": False,
-                        "status": "closed",
-                        "reason": close_action["reason"],
-                        "filled_amount": fill["filled_amount"],
-                    })
-                    market_data[inst.split("_")[0]] = {
-                        "instrument": inst,
-                        "market_state": "closed",
-                        "book_age_seconds": 0,
-                        "best_bid": None,
-                        "best_ask": None,
-                        "spread_bps": None,
-                        "candles": 0,
-                        "errors": [],
-                        "note": "illiquid_closed_via_market_order",
-                    }
-                    continue
-            except Exception as e:
-                log.warning(f"market order close failed for {inst}: {e}")
+            # Try market close via close_position API - with fallbacks for thin books
+            # Deribit testnet thin books cause market orders to rest and cancel with 0 fill (see qkt issue #1359)
+            # So we try: 1) close_position market, 2) close_position limit with aggressive price, 3) direct market order
+            for attempt in range(3):
+                try:
+                    if attempt == 0:
+                        # Attempt 1: market close_position
+                        result = c.close_position(inst)
+                    elif attempt == 1:
+                        # Attempt 2: limit close_position with 5% aggressive price
+                        mark = float(by_inst.get(inst, {}).get("mark_price") or 0)
+                        if mark <= 0:
+                            continue
+                        # For long position (qty>0), we sell, so price slightly below mark to ensure fill
+                        # For short, price slightly above
+                        aggressive_price = mark * (0.95 if qty > 0 else 1.05)
+                        result = c._private("close_position", {"instrument_name": inst, "type": "limit", "price": aggressive_price})
+                    else:
+                        # Attempt 3: direct market order
+                        if qty > 0:
+                            result = c.sell_market(inst, abs(qty), label=f"close_{inst.split('_')[0].lower()}_illiquid", reduce_only=True)
+                        else:
+                            result = c.buy_market(inst, abs(qty), label=f"close_{inst.split('_')[0].lower()}_illiquid", reduce_only=True)
+                    fill = fill_summary(result)
+                    if fill["filled_amount"] > 0:
+                        close_action = {
+                            "asset": inst.split("_")[0],
+                            "instrument": inst,
+                            "status": "closed",
+                            "amount": fill["filled_amount"],
+                            "price": fill.get("average_price"),
+                            "notional_usd": fill["filled_amount"] * float(fill.get("average_price") or 0),
+                            "order_id": fill.get("order_id"),
+                            "filled_amount": fill["filled_amount"],
+                            "reason": f"Market closed illiquid {inst} via attempt {attempt+1} - permanent fix",
+                            "direction": "sell" if qty > 0 else "buy",
+                            "reduce_only": True,
+                        }
+                        self._log_fill(close_action)
+                        inventory[inst] = 0.0
+                        closed_via_market = True
+                        actions.append({
+                            "asset": inst.split("_")[0],
+                            "instrument": inst,
+                            "desired_coin": 0.0,
+                            "target_amt": 0.0,
+                            "current_size": qty,
+                            "delta": -qty,
+                            "notional_usd": close_action["notional_usd"],
+                            "contributors": {},
+                            "price": close_action["price"] or 0,
+                            "market_state": "closed_via_market",
+                            "can_execute": False,
+                            "status": "closed",
+                            "reason": close_action["reason"],
+                            "filled_amount": fill["filled_amount"],
+                        })
+                        market_data[inst.split("_")[0]] = {
+                            "instrument": inst,
+                            "market_state": "closed",
+                            "book_age_seconds": 0,
+                            "best_bid": None,
+                            "best_ask": None,
+                            "spread_bps": None,
+                            "candles": 0,
+                            "errors": [],
+                            "note": f"illiquid_closed_attempt_{attempt+1}",
+                        }
+                        self.state.push("info", f"Closed illiquid {inst} qty {qty} via attempt {attempt+1}")
+                        break
+                    else:
+                        log.info(f"close attempt {attempt+1} for {inst} returned 0 fill, trying next")
+                        if attempt == 2:
+                            self.state.push("warning", f"close_position 0 fill for {inst} after 3 attempts - book may be empty")
+                except Exception as e:
+                    log.warning(f"close attempt {attempt+1} failed for {inst}: {e}")
+                    self.state.push("warning", f"close attempt {attempt+1} failed {inst}: {e}")
+                    if attempt == 2:
+                        # Final fallback will be limit IOC below
+                        pass
             if closed_via_market:
                 continue
             # Fallback: try limit IOC close
