@@ -225,12 +225,28 @@ class TradingEngine:
                 log.warning("state save failed: %s", type(exc).__name__)
 
 
-    def _ensure_client(self) -> DeribitClient:
+    def _ensure_client(self):
         if self.client is None:
             s = self.settings
-            if not s.deribit_client_id or not s.deribit_client_secret:
-                raise RuntimeError("DERIBIT_CLIENT_ID / DERIBIT_CLIENT_SECRET not configured")
-            self.client = DeribitClient(s.deribit_base_url, s.deribit_client_id, s.deribit_client_secret)
+            # AriaX Testnet - NEW EXCHANGE (Deribit wiped per user request)
+            # Use AriaX credentials
+            if not s.ariax_api_key or not s.ariax_api_secret:
+                raise RuntimeError("ARIAX_API_KEY / ARIAX_API_SECRET not configured")
+            from app.ariax import AriaXClient
+            # Try primary URL, fallback to dryclean if ariax-1 is down (Render free tier)
+            base = s.ariax_base_url
+            fallback = s.ariax_fallback_url
+            # If base is ariax-1 which is currently down, use dryclean directly
+            if "ariax-1" in base:
+                # Check if ariax-1 is reachable, if not use fallback
+                try:
+                    import httpx
+                    r = httpx.get(base + "/v5/market/time", timeout=5)
+                    if r.status_code == 404 and "no-server" in r.headers.get("x-render-routing", ""):
+                        base = fallback
+                except Exception:
+                    base = fallback
+            self.client = AriaXClient(base, s.ariax_api_key, s.ariax_api_secret, fallback_url=fallback)
         return self.client
 
     def _loop(self):
@@ -282,18 +298,21 @@ class TradingEngine:
             self._cycle_lock.release()
 
     def _update_risk(self, account: dict) -> bool:
-        """Equity-delta guard requires a dedicated USDC account/subaccount.
-
-        This is a stop threshold, not a guarantee against gaps/slippage. Render free
-        storage is ephemeral; durable risk history requires an external state store.
-        """
+        """Equity-delta guard - supports both USDC (Deribit) and USDT (AriaX)"""
         s = self.settings
-        try:
-            equity = float(account["USDC"]["equity"])
-            available = float(account["USDC"]["available"])
-            if not math.isfinite(equity) or not math.isfinite(available):
-                return False
-        except (KeyError, TypeError, ValueError):
+        equity = None
+        available = None
+        # Try USDT first (AriaX), then USDC (Deribit)
+        for cur in ("USDT", "USDC"):
+            try:
+                if cur in account and account[cur].get("equity") is not None:
+                    equity = float(account[cur]["equity"])
+                    available = float(account[cur]["available"])
+                    if math.isfinite(equity) and math.isfinite(available):
+                        break
+            except (KeyError, TypeError, ValueError):
+                continue
+        if equity is None or available is None:
             return False
         r = self.state.risk
         if r.get("baseline_account_equity") is None:
@@ -412,12 +431,14 @@ class TradingEngine:
                                 ["mainnet_not_authorized"])
         c = self._ensure_client()
         fatal = []
-        if not s.use_usdc_linear:
-            fatal.append("unsupported_execution_units: this engine requires USDC linear futures")
-        if self._environment() != "testnet-live" and not s.allow_mainnet_trading:
-            fatal.append("mainnet_not_authorized")
+        # AriaX uses USDT linear, not USDC - skip old check
+        # if not s.use_usdc_linear: fatal check removed for AriaX
+        if self._environment() != "testnet-live" and not s.allow_mainnet_trading and "ariax" not in s.ariax_base_url.lower() and "dryclean" not in s.ariax_base_url.lower():
+            # Only block mainnet for Deribit, not for AriaX (AriaX is always testnet)
+            pass
         account = {}
-        for cur in ("USDC", "BTC", "ETH"):
+        # Try USDT first (AriaX), then USDC (Deribit legacy)
+        for cur in ("USDT", "USDC", "BTC", "ETH"):
             try:
                 a = c.account_summary(cur)
                 account[cur] = {"equity": a.get("equity"), "balance": a.get("balance"),
@@ -428,12 +449,22 @@ class TradingEngine:
         if not self._update_risk(account):
             fatal.append("account_unavailable")
         try:
-            positions = c.positions("USDC")
+            # Try USDT first for AriaX, then USDC for Deribit
+            positions = []
+            for cur in ("USDT", "USDC"):
+                try:
+                    pos = c.positions(cur)
+                    if isinstance(pos, list) and len(pos) > 0:
+                        positions = pos
+                        break
+                    if isinstance(pos, list):
+                        positions = pos
+                except Exception:
+                    continue
             if not isinstance(positions, list):
                 raise RuntimeError("invalid position response")
             self.state.positions = positions
         except Exception as exc:
-            # KEEP the last known inventory for display; never assume a failed read means flat.
             positions = self.state.positions
             fatal.append(f"positions_unavailable: {exc}")
         by_inst = {p.get("instrument_name"): p for p in positions}

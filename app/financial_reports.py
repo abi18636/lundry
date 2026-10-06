@@ -21,7 +21,10 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from app.deribit import DeribitClient
+try:
+    from app.ariax import AriaXClient as DeribitClient
+except ImportError:
+    from app.deribit import DeribitClient
 from app.execution import signed_position
 
 log = logging.getLogger("financial-reports")
@@ -395,6 +398,19 @@ class FinancialReporting:
     def _client(self) -> DeribitClient:
         if self._read_client is None:
             s = self.engine.settings
+            # AriaX - new exchange
+            try:
+                from app.ariax import AriaXClient
+                if s.ariax_api_key and s.ariax_api_secret:
+                    base = s.ariax_base_url
+                    fallback = s.ariax_fallback_url
+                    if "ariax-1" in base:
+                        base = fallback
+                    self._read_client = AriaXClient(base, s.ariax_api_key, s.ariax_api_secret, timeout=12, fallback_url=fallback)
+                    return self._read_client
+            except Exception:
+                pass
+            # Fallback Deribit (legacy)
             if not s.deribit_client_id or not s.deribit_client_secret:
                 raise RuntimeError("Reporting credentials not configured")
             self._read_client = DeribitClient(s.deribit_base_url, s.deribit_client_id, s.deribit_client_secret, timeout=12)

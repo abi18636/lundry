@@ -9,8 +9,14 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.8"
-      - key: DERIBIT_BASE_URL
-        value: https://test.deribit.com/api/v2
+      - key: ARIAX_BASE_URL
+        value: https://dryclean-app-1.onrender.com
+      - key: ARIAX_FALLBACK_URL
+        value: https://dryclean-app-1.onrender.com
+      - key: ARIAX_API_KEY
+        value: arx-fca61a10ad29397189fcc749bac3285f
+      - key: ARIAX_API_SECRET
+        sync: false
       - key: TRADING_ENABLED
         value: "true"
       - key: DRY_RUN
@@ -18,23 +24,23 @@ services:
       - key: CAPITAL_USD
         value: "400"
       - key: LEV_CAP
-        value: "1.0"
+        value: "2.0"
       - key: LONG_ONLY
-        value: "true"
+        value: "false"
       - key: ASSETS
-        value: BTC,ETH,SOL,DOGE,AVAX,APT,TRX
+        value: BTC,ETH,SOL,XRP,DOGE,ADA,AVAX,LINK,DOT,LTC,BCH,TRX,XLM,AAVE,UNI
       - key: SLEEVE_WEIGHTS
         value: "zenith_apex:0.25,almasi_primary:0.25,inst_v3_stable:0.30,inst_v3_primary:0.10,zenith_endurance:0.10"
       - key: SLEEVES_ENABLED
         value: "zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance"
       - key: LOOP_SECONDS
-        value: "120"
+        value: "60"
       - key: MAX_NOTIONAL_USD
         value: "400"
       - key: MIN_NOTIONAL_USD
         value: "10"
       - key: CANDLE_LOOKBACK_HOURS
-        value: "2500"
+        value: "1000"
       - key: TELEGRAM_TRADE_ONLY
         value: "true"
       - key: TELEGRAM_FULL_REPORT_HOURS
@@ -62,17 +68,13 @@ services:
       - key: TEST_TRADE_ENABLED
         value: "false"
       - key: TEST_TRADE_ASSET
-        value: "XRP"
+        value: "BTC"
       - key: TEST_TRADE_HOLD_SECONDS
         value: "60"
       - key: TEST_TRADE_MAX_NOTIONAL_USD
         value: "10"
       - key: TELEGRAM_BOT_USERNAME
         value: "TestTraid_bot"
-      - key: DERIBIT_CLIENT_ID
-        sync: false
-      - key: DERIBIT_CLIENT_SECRET
-        sync: false
       - key: TELEGRAM_ENABLED
         sync: false
       - key: TELEGRAM_BOT_TOKEN
