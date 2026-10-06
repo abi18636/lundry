@@ -28,10 +28,10 @@ class Settings(BaseSettings):
 
     # AriaX supports 15 linear perps - use all for diversification
     # BTC, ETH, SOL, XRP, DOGE, ADA, AVAX, LINK, DOT, LTC, BCH, TRX, XLM, AAVE, UNI
-    capital_usd: float = Field(default=400.0, gt=0)
-    lev_cap: float = Field(default=1.0, gt=0, le=10.0)
-    long_only: bool = False  # AriaX supports long & short, enable for more usage
-    assets: str = "BTC,ETH,SOL,XRP,DOGE,ADA,AVAX,LINK,DOT,LTC,BCH,TRX,XLM,AAVE,UNI"
+    capital_usd: float = Field(default=200.0, gt=0)
+    lev_cap: float = Field(default=5.0, gt=0, le=10.0)
+    long_only: bool = False  # Futures long & short for 200 USDT
+    assets: str = "BTC,ETH,SOL,AVAX,LINK"
 
     # Sleeve weights — independent DNA, no mixing
     sleeve_weights: str = (

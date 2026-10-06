@@ -22,13 +22,13 @@ services:
       - key: DRY_RUN
         value: "false"
       - key: CAPITAL_USD
-        value: "400"
+        value: "200"
       - key: LEV_CAP
-        value: "2.0"
+        value: "5.0"
       - key: LONG_ONLY
         value: "false"
       - key: ASSETS
-        value: BTC,ETH,SOL,XRP,DOGE,ADA,AVAX,LINK,DOT,LTC,BCH,TRX,XLM,AAVE,UNI
+        value: BTC,ETH,SOL,AVAX,LINK
       - key: SLEEVE_WEIGHTS
         value: "zenith_apex:0.25,almasi_primary:0.25,inst_v3_stable:0.30,inst_v3_primary:0.10,zenith_endurance:0.10"
       - key: SLEEVES_ENABLED
