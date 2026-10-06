@@ -534,15 +534,24 @@ class TradingEngine:
         except Exception as exc:
             fatal.append(f"position_units_invalid: {exc}")
 
-        # Permanent fix: close positions for illiquid assets not in 7 liquid list
-        # These cause losses due to wide spreads and locked markets
-        LIQUID_7_INSTRUMENTS = {s.instrument_for(a) for a in ["BTC", "ETH", "SOL", "DOGE", "AVAX", "APT", "TRX"]}
+        # Permanent fix: close positions for illiquid assets not in supported list
+        # For AriaX: 15 assets, for Deribit legacy: 7
+        LIQUID_INSTRUMENTS = {s.instrument_for(a) for a in s.asset_list}
+        # Also include legacy Deribit instruments for backward compat
+        LIQUID_INSTRUMENTS.update({f"{a}_USDC-PERPETUAL" for a in s.asset_list})
         illiquid_positions = []
         for inst, qty in inventory.items():
             if abs(qty) > 1e-12:
-                # Any position not in LIQUID_7 is illiquid and must be closed
-                asset_from_inst = inst.split("_")[0] if "_USDC" in inst else inst.split("-")[0]
-                if inst not in LIQUID_7_INSTRUMENTS or asset_from_inst not in s.asset_list:
+                # Parse asset from instrument: handle BTCUSDT, BTCUSD, BTC_USDC-PERPETUAL
+                if "_" in inst and "-PERPETUAL" in inst:
+                    asset_from_inst = inst.split("_")[0]
+                elif inst.endswith("USDT"):
+                    asset_from_inst = inst.replace("USDT", "")
+                elif inst.endswith("USD"):
+                    asset_from_inst = inst.replace("USD", "")
+                else:
+                    asset_from_inst = inst.split("-")[0]
+                if inst not in LIQUID_INSTRUMENTS and asset_from_inst not in s.asset_list:
                     illiquid_positions.append((inst, qty))
         if illiquid_positions:
             self.state.push("warning", f"Detected {len(illiquid_positions)} illiquid positions to close: {illiquid_positions}")
@@ -758,8 +767,8 @@ class TradingEngine:
                     block("test_recovery_pending", "Only this instrument is reserved until old test ownership is reconciled")
             elif not meta:
                 block("instrument_unavailable", "Instrument metadata failed; not a market halt")
-            elif meta.get("instrument_type") != "linear" or meta.get("settlement_currency") != "USDC":
-                block("unsupported_instrument", "Only USDC linear perpetuals are authorized")
+            elif meta.get("instrument_type") != "linear" or meta.get("settlement_currency") not in ("USDC", "USDT"):
+                block("unsupported_instrument", f"Only USDC/USDT linear perpetuals are authorized, got {meta.get('settlement_currency')}")
             elif any(x["stage"] == "book" for x in d["errors"]):
                 block("market_api_error", " | ".join(x["error"] for x in d["errors"] if x["stage"] == "book"))
             elif state != "open":
@@ -876,7 +885,11 @@ class TradingEngine:
         self.state.risk["target_scale"] = scale
         if any(float(a.get("filled_amount") or 0) > 0 for a in actions):
             try:
-                self.state.positions = c.positions("USDC")
+                # Try USDT first (AriaX), fallback USDC
+                try:
+                    self.state.positions = c.positions("USDT")
+                except Exception:
+                    self.state.positions = c.positions("USDC")
             except Exception as exc:
                 fatal.append(f"post_order_positions_unavailable: {exc}")
         return self._finish(actions, market_data, fatal)
