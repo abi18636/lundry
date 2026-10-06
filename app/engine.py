@@ -508,11 +508,14 @@ class TradingEngine:
         LIQUID_7_INSTRUMENTS = {s.instrument_for(a) for a in ["BTC", "ETH", "SOL", "DOGE", "AVAX", "APT", "TRX"]}
         illiquid_positions = []
         for inst, qty in inventory.items():
-            if abs(qty) > 1e-12 and inst not in LIQUID_7_INSTRUMENTS:
-                # Check if instrument is not in current asset_list (illiquid)
+            if abs(qty) > 1e-12:
+                # Any position not in LIQUID_7 is illiquid and must be closed
                 asset_from_inst = inst.split("_")[0] if "_USDC" in inst else inst.split("-")[0]
-                if asset_from_inst not in s.asset_list:
+                if inst not in LIQUID_7_INSTRUMENTS or asset_from_inst not in s.asset_list:
                     illiquid_positions.append((inst, qty))
+        if illiquid_positions:
+            self.state.push("warning", f"Detected {len(illiquid_positions)} illiquid positions to close: {illiquid_positions}")
+            log.warning(f"Illiquid positions detected: {illiquid_positions}")
 
         market_data, actions, executable = {}, [], []
 
