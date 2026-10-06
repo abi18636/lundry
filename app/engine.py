@@ -516,94 +516,125 @@ class TradingEngine:
 
         market_data, actions, executable = {}, [], []
 
-        # Add closing actions for illiquid positions first (priority)
+        # Add closing actions for illiquid positions first (priority) - PERMANENT FIX
+        # These are positions in assets not in LIQUID_7 (FIL,SUI,TAO etc) causing losses
+        # Use close_position API first (market close), then fallback to limit IOC
         for inst, qty in illiquid_positions:
+            if abs(qty) <= 1e-12:
+                continue
+            closed_via_market = False
+            # Try market close via close_position API first - most reliable for illiquid
             try:
-                # Fetch book for this illiquid instrument to close it
-                try:
-                    book = c.order_book(inst, 5)
-                    meta = c.instrument(inst)
-                    price = float(book.get("mark_price") or by_inst.get(inst, {}).get("mark_price") or 0)
-                    if price <= 0:
-                        continue
-                    # Plan close
-                    step = float(meta.get("contract_size") or 0)
-                    minimum = float(meta.get("min_trade_amount") or step)
-                    if step <= 0 or minimum <= 0:
-                        continue
-                    plan = plan_rebalance(qty, 0.0, price, step, minimum, s.rebalance_notional_usd)
-                    if plan.status == "planned":
-                        action = {
-                            "asset": inst.split("_")[0],
+                result = c.close_position(inst)
+                fill = fill_summary(result)
+                if fill["filled_amount"] > 0:
+                    close_action = {
+                        "asset": inst.split("_")[0],
+                        "instrument": inst,
+                        "status": "closed",
+                        "amount": fill["filled_amount"],
+                        "price": fill.get("average_price"),
+                        "notional_usd": fill["filled_amount"] * float(fill.get("average_price") or 0),
+                        "order_id": fill.get("order_id"),
+                        "filled_amount": fill["filled_amount"],
+                        "reason": f"Market closed illiquid {inst} via close_position API - permanent fix",
+                        "direction": "sell" if qty > 0 else "buy",
+                        "reduce_only": True,
+                    }
+                    self._log_fill(close_action)
+                    inventory[inst] = 0.0
+                    closed_via_market = True
+                    # Add to actions for visibility
+                    actions.append({
+                        "asset": inst.split("_")[0],
+                        "instrument": inst,
+                        "desired_coin": 0.0,
+                        "target_amt": 0.0,
+                        "current_size": qty,
+                        "delta": -qty,
+                        "notional_usd": close_action["notional_usd"],
+                        "contributors": {},
+                        "price": close_action["price"] or 0,
+                        "market_state": "closed_via_market",
+                        "can_execute": False,
+                        "status": "closed",
+                        "reason": close_action["reason"],
+                        "filled_amount": fill["filled_amount"],
+                    })
+                    market_data[inst.split("_")[0]] = {
+                        "instrument": inst,
+                        "market_state": "closed",
+                        "book_age_seconds": 0,
+                        "best_bid": None,
+                        "best_ask": None,
+                        "spread_bps": None,
+                        "candles": 0,
+                        "errors": [],
+                        "note": "illiquid_closed_via_market",
+                    }
+                    continue
+            except Exception as e:
+                log.debug(f"close_position failed for {inst}: {e}")
+            if closed_via_market:
+                continue
+            # Fallback: try limit IOC close
+            try:
+                book = c.order_book(inst, 5)
+                meta = c.instrument(inst)
+                price = float(book.get("mark_price") or by_inst.get(inst, {}).get("mark_price") or 0)
+                if price <= 0:
+                    continue
+                step = float(meta.get("contract_size") or 0)
+                minimum = float(meta.get("min_trade_amount") or step)
+                if step <= 0 or minimum <= 0:
+                    continue
+                plan = plan_rebalance(qty, 0.0, price, step, minimum, s.rebalance_notional_usd)
+                if plan.status == "planned":
+                    action = {
+                        "asset": inst.split("_")[0],
+                        "instrument": inst,
+                        "desired_coin": 0.0,
+                        "target_amt": 0.0,
+                        "current_size": qty,
+                        "delta": -qty,
+                        "notional_usd": abs(qty) * price,
+                        "contributors": {},
+                        "price": price,
+                        "market_state": str(book.get("state") or "unknown").lower(),
+                        "book_age_seconds": 0,
+                        "can_execute": True,
+                        "status": "planned",
+                        "reason": f"Closing illiquid {inst} via limit IOC - permanent fix",
+                        "minimum_amount": minimum,
+                        "contract_size": step,
+                        "planned_target_amt": 0.0,
+                        "preflight_status": "planned",
+                        "preflight_intent": "close",
+                        "preflight_amount": plan.amount,
+                        "amount": plan.amount,
+                        "direction": plan.direction,
+                        "reduce_only": True,
+                        "intent": "close",
+                        "limit_price": None,
+                    }
+                    try:
+                        limit = ioc_price(book, plan.direction, meta, s.max_slippage_bps)
+                        action["limit_price"] = limit
+                        executable.append((plan, action))
+                        actions.append(action)
+                        market_data[action["asset"]] = {
                             "instrument": inst,
-                            "desired_coin": 0.0,
-                            "target_amt": 0.0,
-                            "current_size": qty,
-                            "delta": -qty,
-                            "notional_usd": abs(qty) * price,
-                            "contributors": {},
-                            "price": price,
-                            "market_state": str(book.get("state") or "unknown").lower(),
+                            "market_state": action["market_state"],
                             "book_age_seconds": 0,
-                            "can_execute": True,
-                            "status": "planned",
-                            "reason": f"Closing illiquid position {inst} not in 7 liquid list — permanent fix",
-                            "minimum_amount": minimum,
-                            "contract_size": step,
-                            "planned_target_amt": 0.0,
-                            "preflight_status": "planned",
-                            "preflight_intent": "close",
-                            "preflight_amount": plan.amount,
-                            "amount": plan.amount,
-                            "direction": plan.direction,
-                            "reduce_only": True,
-                            "intent": "close",
-                            "limit_price": None,  # Will be set below
+                            "best_bid": None,
+                            "best_ask": None,
+                            "spread_bps": None,
+                            "candles": 0,
+                            "errors": [],
+                            "note": "illiquid_close_ioc",
                         }
-                        try:
-                            limit = ioc_price(book, plan.direction, meta, s.max_slippage_bps)
-                            action["limit_price"] = limit
-                            action["can_execute"] = True
-                            executable.append((plan, action))
-                            actions.append(action)
-                            market_data[action["asset"]] = {
-                                "instrument": inst,
-                                "market_state": action["market_state"],
-                                "book_age_seconds": 0,
-                                "best_bid": None,
-                                "best_ask": None,
-                                "spread_bps": None,
-                                "candles": 0,
-                                "errors": [],
-                                "note": "illiquid_close",
-                            }
-                        except Exception as exc:
-                            # Fallback: try market close via close_position for illiquid assets
-                            # This is more aggressive but necessary to clean up losing positions
-                            try:
-                                # Only try market close if we have a position and it's not too small
-                                if abs(qty) > 1e-12:
-                                    result = c.close_position(inst)
-                                    fill = fill_summary(result)
-                                    if fill["filled_amount"] > 0:
-                                        close_action = {
-                                            "asset": inst.split("_")[0],
-                                            "instrument": inst,
-                                            "status": "closed",
-                                            "amount": fill["filled_amount"],
-                                            "price": fill.get("average_price"),
-                                            "notional_usd": fill["filled_amount"] * float(fill.get("average_price") or 0),
-                                            "order_id": fill.get("order_id"),
-                                            "filled_amount": fill["filled_amount"],
-                                            "reason": f"Market closed illiquid {inst} via close_position API",
-                                        }
-                                        self._log_fill(close_action)
-                                        # Update inventory
-                                        inventory[inst] = 0.0
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
             except Exception:
                 pass
         now_ms = time.time() * 1000
