@@ -544,7 +544,6 @@ class TradingEngine:
                     self._log_fill(close_action)
                     inventory[inst] = 0.0
                     closed_via_market = True
-                    # Add to actions for visibility
                     actions.append({
                         "asset": inst.split("_")[0],
                         "instrument": inst,
@@ -573,8 +572,65 @@ class TradingEngine:
                         "note": "illiquid_closed_via_market",
                     }
                     continue
+                else:
+                    # Even if filled_amount 0, try market order as fallback
+                    log.info(f"close_position returned 0 fill for {inst}, trying market order")
             except Exception as e:
-                log.debug(f"close_position failed for {inst}: {e}")
+                log.warning(f"close_position failed for {inst}: {e}")
+            # Second attempt: direct market order with reduce_only
+            try:
+                if qty > 0:
+                    result = c.sell_market(inst, abs(qty), label=f"close_{inst.split('_')[0].lower()}_illiquid", reduce_only=True)
+                else:
+                    result = c.buy_market(inst, abs(qty), label=f"close_{inst.split('_')[0].lower()}_illiquid", reduce_only=True)
+                fill = fill_summary(result)
+                if fill["filled_amount"] > 0:
+                    close_action = {
+                        "asset": inst.split("_")[0],
+                        "instrument": inst,
+                        "status": "closed",
+                        "amount": fill["filled_amount"],
+                        "price": fill.get("average_price"),
+                        "notional_usd": fill["filled_amount"] * float(fill.get("average_price") or 0),
+                        "order_id": fill.get("order_id"),
+                        "filled_amount": fill["filled_amount"],
+                        "reason": f"Market closed illiquid {inst} via market order - permanent fix",
+                        "direction": "sell" if qty > 0 else "buy",
+                        "reduce_only": True,
+                    }
+                    self._log_fill(close_action)
+                    inventory[inst] = 0.0
+                    closed_via_market = True
+                    actions.append({
+                        "asset": inst.split("_")[0],
+                        "instrument": inst,
+                        "desired_coin": 0.0,
+                        "target_amt": 0.0,
+                        "current_size": qty,
+                        "delta": -qty,
+                        "notional_usd": close_action["notional_usd"],
+                        "contributors": {},
+                        "price": close_action["price"] or 0,
+                        "market_state": "closed_via_market",
+                        "can_execute": False,
+                        "status": "closed",
+                        "reason": close_action["reason"],
+                        "filled_amount": fill["filled_amount"],
+                    })
+                    market_data[inst.split("_")[0]] = {
+                        "instrument": inst,
+                        "market_state": "closed",
+                        "book_age_seconds": 0,
+                        "best_bid": None,
+                        "best_ask": None,
+                        "spread_bps": None,
+                        "candles": 0,
+                        "errors": [],
+                        "note": "illiquid_closed_via_market_order",
+                    }
+                    continue
+            except Exception as e:
+                log.warning(f"market order close failed for {inst}: {e}")
             if closed_via_market:
                 continue
             # Fallback: try limit IOC close
