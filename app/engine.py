@@ -302,7 +302,6 @@ class TradingEngine:
         s = self.settings
         equity = None
         available = None
-        # Try USDT first (AriaX), then USDC (Deribit)
         for cur in ("USDT", "USDC"):
             try:
                 if cur in account and account[cur].get("equity") is not None:
@@ -315,6 +314,17 @@ class TradingEngine:
         if equity is None or available is None:
             return False
         r = self.state.risk
+
+        # RESET if capital changed (e.g., 400->200) or peak is from old deployment
+        # User requested 200 USDT futures - old peak 400 would cause 50% drawdown false positive
+        if r.get("baseline_account_equity") is not None:
+            old_peak = float(r.get("peak_bot_equity") or 0)
+            # If peak is more than 50% higher than current capital, it's from old deployment - reset
+            if old_peak > s.capital_usd * 1.5:
+                log.warning(f"Resetting risk: old peak {old_peak} vs new capital {s.capital_usd} - capital changed 400->200")
+                r = {"baseline_account_equity": equity, "baseline_at": utcnow(), "peak_bot_equity": s.capital_usd, "drawdown_latched": False}
+                self.state.push("warning", f"Risk reset: capital changed {old_peak}->{s.capital_usd}, peak reset")
+
         if r.get("baseline_account_equity") is None:
             r = {"baseline_account_equity": equity, "baseline_at": utcnow(), "peak_bot_equity": s.capital_usd,
                  "drawdown_latched": False}
@@ -322,7 +332,9 @@ class TradingEngine:
         peak = max(float(r.get("peak_bot_equity") or s.capital_usd), estimated)
         drawdown = max(0.0, (peak - estimated) / peak) if peak > 0 else 1.0
         latched = bool(r.get("drawdown_latched")) or drawdown >= s.max_drawdown_pct
-        cap = min(s.capital_usd, max(0.0, estimated)) * min(s.lev_cap, 1.0)
+        # Use lev_cap from settings (now 5x) but cap at 1x for risk calc? User wants 5x futures
+        # For futures, allow lev_cap up to 5x
+        cap = min(s.capital_usd, max(0.0, estimated)) * min(s.lev_cap, 5.0)
         if s.max_notional_usd > 0:
             cap = min(cap, s.max_notional_usd)
         self.state.risk = {**r, "estimated_bot_equity": estimated, "peak_bot_equity": peak,
