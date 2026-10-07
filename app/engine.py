@@ -332,7 +332,14 @@ class TradingEngine:
         estimated = s.capital_usd + equity - float(r["baseline_account_equity"])
         peak = max(float(r.get("peak_bot_equity") or s.capital_usd), estimated)
         drawdown = max(0.0, (peak - estimated) / peak) if peak > 0 else 1.0
-        latched = bool(r.get("drawdown_latched")) or drawdown >= s.max_drawdown_pct
+        old_latched = bool(r.get("drawdown_latched"))
+        # Auto-unlatch when drawdown recovers below 50% of threshold (e.g., 15% -> unlatch at 7.5%)
+        # This allows recovery after drawdown_guard blocked trading
+        if old_latched and drawdown < s.max_drawdown_pct * 0.5:
+            latched = False
+            log.info(f"Drawdown recovered {drawdown*100:.1f}% < {s.max_drawdown_pct*50:.1f}%, unlatching guard (was latched)")
+        else:
+            latched = old_latched or drawdown >= s.max_drawdown_pct
         # Use lev_cap from settings (now 5x) but cap at 1x for risk calc? User wants 5x futures
         # For futures, allow lev_cap up to 5x
         cap = min(s.capital_usd, max(0.0, estimated)) * min(s.lev_cap, 5.0)

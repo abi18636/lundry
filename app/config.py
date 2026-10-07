@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     max_signal_no_trade_hours: float = Field(default=6.0, gt=0)
     max_spread_bps: float = Field(default=200.0, gt=0)
     max_slippage_bps: float = Field(default=100.0, ge=0, le=500)
-    max_drawdown_pct: float = Field(default=0.15, gt=0, le=0.50)
+    max_drawdown_pct: float = Field(default=0.30, gt=0, le=0.50)  # Increased from 15% to 30% to allow 5/5 trading with volatility
     ops_review_seconds: int = Field(default=3600, ge=60)
     allow_mainnet_trading: bool = False
     candle_lookback_hours: int = 2500
