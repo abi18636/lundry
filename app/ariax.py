@@ -580,7 +580,7 @@ class AriaXClient:
             raise AriaXAPIError("cancel", -1, str(exc))
 
     # ── Trading ─────────────────────────────────────────────────────────
-    def _place_order_legacy(self, symbol_legacy: str, side: str, qty: float, order_type: str = "market", price: Optional[float] = None, lev: int = 1, reduce_only: bool = False) -> dict:
+    def _place_order_legacy(self, symbol_legacy: str, side: str, qty: float, order_type: str = "market", price: Optional[float] = None, lev: int = 5, reduce_only: bool = False) -> dict:
         body = {
             "symbol": symbol_legacy,
             "side": side,
@@ -590,89 +590,91 @@ class AriaXClient:
         }
         if price is not None and order_type == "limit":
             body["price"] = price
-        # Note: legacy doesn't have reduce_only param, but we try
         data = self._request("POST", "/api/order", json_body=body, use_v5_auth=False, is_public=False)
         return data
 
-    def _place_order_v5(self, symbol_v5: str, side: str, qty: float, order_type: str = "Market", price: Optional[float] = None, lev: int = 1, reduce_only: bool = False, label: str = "") -> dict:
-        ts = str(int(time.time() * 1000))
-        recv = "5000"
-        # side Buy/Sell, orderType Limit/Market
-        body = {
-            "category": "linear",
-            "symbol": symbol_v5,
-            "side": side.capitalize(),  # Buy/Sell
-            "orderType": order_type.capitalize(),  # Market/Limit
-            "qty": str(qty),
-            "timeInForce": "IOC" if order_type.lower() == "market" else "GTC",
-        }
-        if price is not None and order_type.lower() == "limit":
-            body["price"] = str(price)
-        if reduce_only:
-            body["reduceOnly"] = True
-        if label:
-            body["orderLinkId"] = label[:32]
-
+    def _place_order_v5(self, symbol_v5: str, side: str, qty: float, order_type: str = "Market", price: Optional[float] = None, lev: int = 5, reduce_only: bool = False, label: str = "") -> dict:
         import json as js
-        body_str = js.dumps(body, separators=(",", ":"))
-        sig = self._sign_v5(ts, recv, body_str)
-        headers = self._headers_v5(ts, recv, sig)
-
         for base in [self.base, self.fallback]:
             if not base:
                 continue
             try:
-                resp = self._http.post(base + "/v5/order/create", json=body, headers=headers)
+                ts = str(int(time.time() * 1000))
+                recv = "10000"
+                body = {
+                    "category": "linear",
+                    "symbol": symbol_v5,
+                    "side": side.capitalize(),
+                    "orderType": order_type.capitalize(),
+                    "qty": str(qty),
+                    "timeInForce": "IOC" if order_type.lower() == "market" else "GTC",
+                    "positionIdx": 0,  # One-way mode - required for reduceOnly to work
+                }
+                if price is not None and order_type.lower() == "limit":
+                    body["price"] = str(price)
+                if reduce_only:
+                    body["reduceOnly"] = True
+                if label:
+                    body["orderLinkId"] = label[:32]
+                body_str = js.dumps(body, separators=(",", ":"))
+                payload = f"{ts}{self.api_key}{recv}{body_str}"
+                sig = hmac.new(self.api_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+                headers = {
+                    "X-BAPI-API-KEY": self.api_key,
+                    "X-BAPI-TIMESTAMP": ts,
+                    "X-BAPI-RECV-WINDOW": recv,
+                    "X-BAPI-SIGNATURE": sig,
+                    "Content-Type": "application/json"
+                }
+                resp = self._http.post(base + "/v5/order/create", content=body_str.encode(), headers=headers)
                 data = resp.json()
                 if data.get("retCode") == 0:
                     return data
                 else:
-                    # If v5 fails, raise to try legacy
                     raise AriaXAPIError("order/create", data.get("retCode"), data.get("retMsg", ""))
             except AriaXAPIError:
                 raise
-            except Exception as exc:
+            except Exception:
                 continue
         raise AriaXAPIError("order/create", -1, "all bases failed")
 
     def limit_ioc(self, instrument: str, direction: str, amount: float, price: float, label: str, reduce_only: bool = False) -> dict:
-        """
-        instrument like BTCUSDT, direction buy/sell, amount in base currency
-        """
-        # Map to legacy symbol
         legacy_sym = instrument.replace("USDT", "USD") if instrument.endswith("USDT") else instrument
-        # For AriaX, amount is base qty
         try:
-            # Try v5 first with IOC
-            ts = str(int(time.time() * 1000))
-            recv = "5000"
-            body = {
-                "category": "linear",
-                "symbol": instrument,
-                "side": direction.capitalize(),
-                "orderType": "Limit",
-                "qty": str(amount),
-                "price": str(price),
-                "timeInForce": "IOC",
-                "orderLinkId": label[:32],
-            }
-            if reduce_only:
-                body["reduceOnly"] = True
             import json as js
-            body_str = js.dumps(body, separators=(",", ":"))
-            sig = self._sign_v5(ts, recv, body_str)
-            headers = self._headers_v5(ts, recv, sig)
             for base in [self.base, self.fallback]:
                 if not base:
                     continue
                 try:
-                    resp = self._http.post(base + "/v5/order/create", json=body, headers=headers)
+                    ts = str(int(time.time() * 1000))
+                    recv = "10000"
+                    body = {
+                        "category": "linear",
+                        "symbol": instrument,
+                        "side": direction.capitalize(),
+                        "orderType": "Limit",
+                        "qty": str(amount),
+                        "price": str(price),
+                        "timeInForce": "IOC",
+                        "orderLinkId": label[:32],
+                        "positionIdx": 0,
+                    }
+                    if reduce_only:
+                        body["reduceOnly"] = True
+                    body_str = js.dumps(body, separators=(",", ":"))
+                    payload = f"{ts}{self.api_key}{recv}{body_str}"
+                    sig = hmac.new(self.api_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+                    headers = {
+                        "X-BAPI-API-KEY": self.api_key,
+                        "X-BAPI-TIMESTAMP": ts,
+                        "X-BAPI-RECV-WINDOW": recv,
+                        "X-BAPI-SIGNATURE": sig,
+                        "Content-Type": "application/json"
+                    }
+                    resp = self._http.post(base + "/v5/order/create", content=body_str.encode(), headers=headers)
                     data = resp.json()
                     if data.get("retCode") == 0:
-                        order_id = data.get("result", {}).get("orderId") or data.get("result", {}).get("orderLinkId") or label
-                        # Fetch fills to get filled amount
-                        # For simplicity, assume full fill if IOC and price aggressive, but check execution list
-                        # We return structure compatible with Deribit fill_summary
+                        order_id = data.get("result", {}).get("orderId") or label
                         return {
                             "order": {
                                 "order_id": order_id,
@@ -691,8 +693,7 @@ class AriaXClient:
                     log.debug(f"v5 limit_ioc exception: {e}")
                     continue
 
-            # Fallback legacy limit order
-            data = self._place_order_legacy(legacy_sym, direction, amount, "limit", price, lev=1, reduce_only=reduce_only)
+            data = self._place_order_legacy(legacy_sym, direction, amount, "limit", price, lev=5, reduce_only=reduce_only)
             if data.get("ok"):
                 order_id = data.get("id")
                 return {
@@ -714,33 +715,39 @@ class AriaXClient:
     def buy_market(self, instrument: str, amount: float, label: str = "zenith", reduce_only: bool = False) -> dict:
         legacy_sym = instrument.replace("USDT", "USD") if instrument.endswith("USDT") else instrument
         try:
-            # Try v5 market
-            ts = str(int(time.time() * 1000))
-            recv = "5000"
-            body = {
-                "category": "linear",
-                "symbol": instrument,
-                "side": "Buy",
-                "orderType": "Market",
-                "qty": str(amount),
-                "timeInForce": "IOC",
-                "orderLinkId": label[:32],
-            }
-            if reduce_only:
-                body["reduceOnly"] = True
             import json as js
-            body_str = js.dumps(body, separators=(",", ":"))
-            sig = self._sign_v5(ts, recv, body_str)
-            headers = self._headers_v5(ts, recv, sig)
             for base in [self.base, self.fallback]:
                 if not base:
                     continue
                 try:
-                    resp = self._http.post(base + "/v5/order/create", json=body, headers=headers)
+                    ts = str(int(time.time() * 1000))
+                    recv = "10000"
+                    body = {
+                        "category": "linear",
+                        "symbol": instrument,
+                        "side": "Buy",
+                        "orderType": "Market",
+                        "qty": str(amount),
+                        "timeInForce": "IOC",
+                        "orderLinkId": label[:32],
+                        "positionIdx": 0,
+                    }
+                    if reduce_only:
+                        body["reduceOnly"] = True
+                    body_str = js.dumps(body, separators=(",", ":"))
+                    payload = f"{ts}{self.api_key}{recv}{body_str}"
+                    sig = hmac.new(self.api_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+                    headers = {
+                        "X-BAPI-API-KEY": self.api_key,
+                        "X-BAPI-TIMESTAMP": ts,
+                        "X-BAPI-RECV-WINDOW": recv,
+                        "X-BAPI-SIGNATURE": sig,
+                        "Content-Type": "application/json"
+                    }
+                    resp = self._http.post(base + "/v5/order/create", content=body_str.encode(), headers=headers)
                     data = resp.json()
                     if data.get("retCode") == 0:
                         order_id = data.get("result", {}).get("orderId") or label
-                        # Get last price for avg
                         ticker = self.ticker(instrument)
                         avg = float(ticker.get("lastPrice") or ticker.get("markPrice") or 0)
                         return {
@@ -758,8 +765,7 @@ class AriaXClient:
                 except Exception:
                     continue
 
-            # Fallback legacy
-            data = self._place_order_legacy(legacy_sym, "buy", amount, "market", lev=1, reduce_only=reduce_only)
+            data = self._place_order_legacy(legacy_sym, "buy", amount, "market", lev=5, reduce_only=reduce_only)
             if data.get("ok"):
                 ticker = self.ticker(instrument)
                 avg = float(ticker.get("lastPrice") or 0)
@@ -782,28 +788,36 @@ class AriaXClient:
     def sell_market(self, instrument: str, amount: float, label: str = "zenith", reduce_only: bool = False) -> dict:
         legacy_sym = instrument.replace("USDT", "USD") if instrument.endswith("USDT") else instrument
         try:
-            ts = str(int(time.time() * 1000))
-            recv = "5000"
-            body = {
-                "category": "linear",
-                "symbol": instrument,
-                "side": "Sell",
-                "orderType": "Market",
-                "qty": str(amount),
-                "timeInForce": "IOC",
-                "orderLinkId": label[:32],
-            }
-            if reduce_only:
-                body["reduceOnly"] = True
             import json as js
-            body_str = js.dumps(body, separators=(",", ":"))
-            sig = self._sign_v5(ts, recv, body_str)
-            headers = self._headers_v5(ts, recv, sig)
             for base in [self.base, self.fallback]:
                 if not base:
                     continue
                 try:
-                    resp = self._http.post(base + "/v5/order/create", json=body, headers=headers)
+                    ts = str(int(time.time() * 1000))
+                    recv = "10000"
+                    body = {
+                        "category": "linear",
+                        "symbol": instrument,
+                        "side": "Sell",
+                        "orderType": "Market",
+                        "qty": str(amount),
+                        "timeInForce": "IOC",
+                        "orderLinkId": label[:32],
+                        "positionIdx": 0,
+                    }
+                    if reduce_only:
+                        body["reduceOnly"] = True
+                    body_str = js.dumps(body, separators=(",", ":"))
+                    payload = f"{ts}{self.api_key}{recv}{body_str}"
+                    sig = hmac.new(self.api_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+                    headers = {
+                        "X-BAPI-API-KEY": self.api_key,
+                        "X-BAPI-TIMESTAMP": ts,
+                        "X-BAPI-RECV-WINDOW": recv,
+                        "X-BAPI-SIGNATURE": sig,
+                        "Content-Type": "application/json"
+                    }
+                    resp = self._http.post(base + "/v5/order/create", content=body_str.encode(), headers=headers)
                     data = resp.json()
                     if data.get("retCode") == 0:
                         order_id = data.get("result", {}).get("orderId") or label
@@ -824,7 +838,7 @@ class AriaXClient:
                 except Exception:
                     continue
 
-            data = self._place_order_legacy(legacy_sym, "sell", amount, "market", lev=1, reduce_only=reduce_only)
+            data = self._place_order_legacy(legacy_sym, "sell", amount, "market", lev=5, reduce_only=reduce_only)
             if data.get("ok"):
                 ticker = self.ticker(instrument)
                 avg = float(ticker.get("lastPrice") or 0)
