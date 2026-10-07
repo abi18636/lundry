@@ -772,17 +772,21 @@ class TradingEngine:
                 desired = 0.0
 
             # Workaround for AriaX bug: long positions cannot be reduced (sell fails qty exceeds)
-            # If we have long and desired is smaller but still long, keep current to avoid buggy sell
-            # This prevents below_exchange_minimum and order_error_backoff blocking
-            if current > 0 and desired > 0 and desired < current:
-                # Only allow reduction if delta is large enough (>20% of position) to avoid small rebalances
-                # And only if exchange is not known to have bug - for AriaX, skip reductions
-                if "ariax" in s.ariax_base_url.lower() or "dryclean" in s.ariax_base_url.lower():
-                    # For AriaX, avoid reductions that trigger qty exceeds bug
-                    # Keep current position unless desired is 0 (full close) or significantly larger
-                    if abs(desired - current) / current < 0.5:  # Less than 50% change
+            # User reports only AVAX trades, but with 5/5 signals we now have reversals long->short
+            # AriaX bug: any Sell for long position fails qty exceeds, even if qty < position
+            # So we must avoid ALL reductions and reversals for long positions
+            if "ariax" in s.ariax_base_url.lower() or "dryclean" in s.ariax_base_url.lower():
+                if current > 0 and desired < current:
+                    # Any reduction or reversal (desired < current when long) triggers bug
+                    # Keep current unless desired is 0 (full close attempted) - but even close fails
+                    # So for AriaX, never reduce long positions, only increase
+                    if desired <= 0:
+                        # Reversal long->short or close - this will fail, so keep current
                         desired = current
-                        log.info(f"AriaX workaround: keeping {a} at {current} instead of reducing to {b.get('target_coin')} to avoid qty exceeds bug")
+                        log.info(f"AriaX workaround: keeping long {a} at {current} instead of reversal/close to {b.get('target_coin')} to avoid qty exceeds bug")
+                    elif abs(desired - current) / current < 0.8:  # Less than 80% change
+                        desired = current
+                        log.info(f"AriaX workaround: keeping long {a} at {current} instead of reducing to {b.get('target_coin')} to avoid qty exceeds bug")
             timestamp = book.get("timestamp")
             age = max(0, (now_ms-float(timestamp))/1000) if timestamp else None
             state = str(book.get("state") or "unknown").lower()
