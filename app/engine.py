@@ -174,10 +174,11 @@ class TradingEngine:
             except Exception as exc:
                 result["financial"] = {"error": str(exc), "schema": "financial-reports-v3"}
         result["events"] = result["events"][-60:]
+        effective_weights_cfg = getattr(s, 'effective_sleeve_weights', s.sleeve_weights)
         result["config"] = {
             "capital_usd": s.capital_usd, "lev_cap": s.lev_cap, "long_only": s.long_only,
             "dry_run": s.dry_run, "trading_enabled": s.trading_enabled, "assets": s.asset_list,
-            "sleeve_weights": s.sleeve_weights, "sleeves_enabled": s.enabled_sleeves,
+            "sleeve_weights": effective_weights_cfg, "sleeves_enabled": s.enabled_sleeves,
             "base_url": s.deribit_base_url, "loop_seconds": s.loop_seconds,
             "architecture": "independent_sleeves_net_at_order_layer",
             "execution": "slippage_bounded_limit_ioc", "max_notional_usd": s.max_notional_usd,
@@ -536,7 +537,9 @@ class TradingEngine:
         if getattr(c, "last_testnet", None) is False and not s.allow_mainnet_trading:
             fatal.append("mainnet_response_not_authorized")
         ohlc = {a: d["candles"] for a, d in samples.items() if d.get("candles") is not None}
-        fingerprint = (s.sleeve_weights, tuple(s.enabled_sleeves), s.capital_usd, s.lev_cap,
+        # Use forced weights to guarantee 5/5 coverage (env var in Render dashboard outdated)
+        effective_weights = getattr(s, 'effective_sleeve_weights', s.sleeve_weights)
+        fingerprint = (effective_weights, tuple(s.enabled_sleeves), s.capital_usd, s.lev_cap,
                        tuple((a, len(df), str(df["dt"].iloc[-1]) if len(df) else "", float(df["close"].iloc[-1]) if len(df) else 0)
                              for a, df in sorted(ohlc.items())))
         if self._signal_cache and self._signal_cache[0] == fingerprint:
@@ -544,7 +547,7 @@ class TradingEngine:
         else:
             frames = prepare_frames(ohlc, s.asset_list)
             results, net_book = run_all_sleeves(frames, total_capital=s.capital_usd,
-                                              weights=parse_weights(s.sleeve_weights), lev_cap=s.lev_cap,
+                                              weights=parse_weights(effective_weights), lev_cap=s.lev_cap,
                                               enabled=s.enabled_sleeves)
             sleeves_pub = [asdict(r) for r in results]
             for r in sleeves_pub:

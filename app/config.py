@@ -118,7 +118,24 @@ class Settings(BaseSettings):
 
     @property
     def enabled_sleeves(self) -> List[str]:
-        return [x.strip() for x in self.sleeves_enabled.split(",") if x.strip()]
+        # Force include diversified_5 to guarantee 5/5 assets traded (user reports only AVAX)
+        # Ignore env var if it doesn't include diversified_5
+        raw = [x.strip() for x in self.sleeves_enabled.split(",") if x.strip()]
+        if "diversified_5" not in raw:
+            return ["diversified_5", "zenith_apex", "almasi_primary", "inst_v3_stable", "inst_v3_primary", "zenith_endurance"]
+        return raw
+
+    @property
+    def effective_sleeve_weights(self) -> str:
+        # Force 50% diversified_5 to guarantee 5/5 assets traded (user reports only AVAX)
+        # This overrides env var SLEEVE_WEIGHTS that still has old values in Render dashboard
+        if "diversified_5" not in self.sleeve_weights:
+            return "diversified_5:0.50,zenith_apex:0.15,almasi_primary:0.15,inst_v3_stable:0.10,inst_v3_primary:0.05,zenith_endurance:0.05"
+        return self.sleeve_weights
+
+    @property
+    def forced_sleeve_weights(self) -> str:
+        return self.effective_sleeve_weights
 
     def instrument_for(self, asset: str) -> str:
         """Return v5 symbol like BTCUSDT for market data"""
