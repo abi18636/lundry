@@ -91,24 +91,36 @@ class AriaXClient:
                     else:
                         resp = self._http.request(method, url, params=params, json=json_body)
                 elif use_v5_auth:
-                    # v5 private with HMAC
+                    # v5 private with HMAC - fixed to use recv 10000 and raw body
+                    import json as js
                     ts = str(int(time.time() * 1000))
-                    recv = "5000"
+                    recv = "10000"
                     if method == "GET":
-                        # payload = query string
                         query_str = ""
                         if params:
-                            # sort keys for deterministic? Bybit uses raw query string as sent
                             query_str = "&".join(f"{k}={v}" for k, v in params.items())
-                        sig = self._sign_v5(ts, recv, query_str)
-                        headers = self._headers_v5(ts, recv, sig)
+                        payload = f"{ts}{self.api_key}{recv}{query_str}"
+                        sig = hmac.new(self.api_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+                        headers = {
+                            "X-BAPI-API-KEY": self.api_key,
+                            "X-BAPI-TIMESTAMP": ts,
+                            "X-BAPI-RECV-WINDOW": recv,
+                            "X-BAPI-SIGNATURE": sig,
+                            "Content-Type": "application/json"
+                        }
                         resp = self._http.get(url, params=params, headers=headers)
                     else:
-                        import json as js
                         body_str = js.dumps(json_body or {}, separators=(",", ":"))
-                        sig = self._sign_v5(ts, recv, body_str)
-                        headers = self._headers_v5(ts, recv, sig)
-                        resp = self._http.request(method, url, json=json_body, headers=headers)
+                        payload = f"{ts}{self.api_key}{recv}{body_str}"
+                        sig = hmac.new(self.api_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+                        headers = {
+                            "X-BAPI-API-KEY": self.api_key,
+                            "X-BAPI-TIMESTAMP": ts,
+                            "X-BAPI-RECV-WINDOW": recv,
+                            "X-BAPI-SIGNATURE": sig,
+                            "Content-Type": "application/json"
+                        }
+                        resp = self._http.request(method, url, content=body_str.encode(), headers=headers)
                 else:
                     # Legacy v1 with simple headers
                     headers = self._headers_legacy()
@@ -854,27 +866,35 @@ class AriaXClient:
 
     def set_leverage(self, instrument: str, leverage: int) -> dict:
         """
-        Set leverage for symbol - AriaX supports 1-100x depending on symbol
+        Set leverage for symbol - AriaX supports 1-100x
         Uses v5 endpoint POST /v5/position/set-leverage
+        Fixed: use recv 10000 and data=body_str (not json) to match Bybit spec
         """
         try:
-            ts = str(int(time.time() * 1000))
-            recv = "5000"
-            body = {
-                "category": "linear",
-                "symbol": instrument,
-                "buyLeverage": str(leverage),
-                "sellLeverage": str(leverage),
-            }
             import json as js
-            body_str = js.dumps(body, separators=(",", ":"))
-            sig = self._sign_v5(ts, recv, body_str)
-            headers = self._headers_v5(ts, recv, sig)
             for base in [self.base, self.fallback]:
                 if not base:
                     continue
                 try:
-                    resp = self._http.post(base + "/v5/position/set-leverage", json=body, headers=headers)
+                    ts = str(int(time.time() * 1000))
+                    recv = "10000"
+                    body = {
+                        "category": "linear",
+                        "symbol": instrument,
+                        "buyLeverage": str(leverage),
+                        "sellLeverage": str(leverage),
+                    }
+                    body_str = js.dumps(body, separators=(",", ":"))
+                    payload = f"{ts}{self.api_key}{recv}{body_str}"
+                    sig = hmac.new(self.api_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+                    headers = {
+                        "X-BAPI-API-KEY": self.api_key,
+                        "X-BAPI-TIMESTAMP": ts,
+                        "X-BAPI-RECV-WINDOW": recv,
+                        "X-BAPI-SIGNATURE": sig,
+                        "Content-Type": "application/json"
+                    }
+                    resp = self._http.post(base + "/v5/position/set-leverage", content=body_str.encode(), headers=headers)
                     data = resp.json()
                     if data.get("retCode") == 0:
                         log.info(f"Set leverage {instrument} to {leverage}x")
@@ -884,7 +904,6 @@ class AriaXClient:
                 except Exception as e:
                     log.debug(f"set_leverage exception {instrument}: {e}")
                     continue
-            # Fallback: try legacy? No legacy leverage endpoint, so just log
             return {"retCode": -1, "retMsg": "failed"}
         except Exception as exc:
             log.warning(f"set_leverage error {instrument}: {exc}")

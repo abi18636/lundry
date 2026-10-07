@@ -287,12 +287,12 @@ def sleeve_inst_v3_stable(frames: Dict[str, pd.DataFrame], capital: float, lev_c
         return res
     fr = {a: frames[a] for a in assets if len(frames[a]) >= 700}
     prim = sig_tsmom_discrete(
-        fr, horizons=(24, 168, 720), vote_min=0.60, confirm=3,
-        adx_min=15.0, er_min=0.05, long_only=False, lag=0, exit_vote=0.20,
+        fr, horizons=(24, 168, 720), vote_min=0.33, confirm=1,
+        adx_min=8.0, er_min=0.01, long_only=False, lag=0, exit_vote=0.10,
     )
     broad = sig_tsmom_discrete(
-        fr, horizons=(24, 168, 720), vote_min=0.40, confirm=3,
-        adx_min=12.0, er_min=0.03, long_only=False, lag=0, exit_vote=0.20,
+        fr, horizons=(24, 168, 720), vote_min=0.33, confirm=1,
+        adx_min=8.0, er_min=0.01, long_only=False, lag=0, exit_vote=0.10,
     )
     cap_p, cap_b = capital * 0.70, capital * 0.30
     sp = {a: (1.0 if _last_side(prim.get(a)) > 0 else 0.0) for a in assets}
@@ -330,8 +330,8 @@ def sleeve_inst_v3_primary(frames: Dict[str, pd.DataFrame], capital: float, lev_
         return res
     fr = {a: frames[a] for a in assets if len(frames[a]) >= 700}
     prim = sig_tsmom_discrete(
-        fr, horizons=(24, 168, 720), vote_min=0.60, confirm=3,
-        adx_min=15.0, er_min=0.05, long_only=False, lag=0, exit_vote=0.20,
+        fr, horizons=(24, 168, 720), vote_min=0.33, confirm=1,
+        adx_min=8.0, er_min=0.01, long_only=False, lag=0, exit_vote=0.10,
     )
     sides = {a: (1.0 if _last_side(prim.get(a)) > 0 else 0.0) for a in assets}
     n_long = max(1, sum(1 for x in sides.values() if x > 0))
