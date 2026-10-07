@@ -91,8 +91,15 @@ def plan_rebalance(current: float, desired: float, price: float, step: float,
         p.direction = "buy" if p.delta > 0 else "sell"
         p.intent = "open" if current == 0 else "increase"
     if p.amount + 1e-12 < minimum:
-        p.status = "below_exchange_minimum"
-        p.reason = "Rebalance delta is smaller than exchange minimum"
+        # If delta is small (less than minimum), consider it target_reached, not blocked
+        # This prevents below_exchange_minimum from blocking entire engine when position is close enough
+        if abs(p.delta) < minimum * 1.5:
+            p.status = "target_reached"
+            p.reason = f"Position close enough to target (delta {p.delta:.6f} < min {minimum})"
+            p.amount = 0
+        else:
+            p.status = "below_exchange_minimum"
+            p.reason = "Rebalance delta is smaller than exchange minimum"
     elif p.intent in ("increase", "reduce") and p.amount * price < max(0, rebalance_threshold):
         p.status = "skip_small"
         p.reason = "Rebalance hysteresis; no forced up-sizing"
