@@ -496,6 +496,32 @@ class TradingEngine:
         reconcile = self._reconcile_pending(c)
         if reconcile:
             fatal.append(reconcile)
+
+        # Set leverage to 5x for all assets if supported (user request: exchange is 10x, if supports 5 use 5)
+        # AriaX supports 1-100x, so 5x is supported for all 5 pairs
+        try:
+            for asset in s.asset_list:
+                inst = s.instrument_for(asset)
+                # Check if position already has lev 5, if not set it
+                # Only set if client has set_leverage method (AriaX)
+                if hasattr(c, 'set_leverage'):
+                    # Get current leverage from position if exists
+                    current_lev = None
+                    for p in positions:
+                        if p.get("instrument_name") == inst:
+                            current_lev = p.get("leverage")
+                            break
+                    # If current is 10 and we want 5, set to 5
+                    target_lev = 5
+                    if current_lev != target_lev:
+                        try:
+                            c.set_leverage(inst, target_lev)
+                            self.state.push("info", f"Set leverage {inst} to {target_lev}x (was {current_lev})")
+                        except Exception as e:
+                            log.debug(f"set_leverage failed for {inst}: {e}")
+        except Exception as e:
+            log.debug(f"leverage setting loop failed: {e}")
+
         samples = {}
         workers = min(max(1, s.max_assets_parallel_candles), max(1, len(s.asset_list)), 8)
         with ThreadPoolExecutor(max_workers=workers) as pool:

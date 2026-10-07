@@ -837,7 +837,6 @@ class AriaXClient:
         Close full position via market order opposite side
         """
         try:
-            # Get current position size
             positions = self.positions()
             for p in positions:
                 if p.get("instrument_name") == instrument:
@@ -849,10 +848,47 @@ class AriaXClient:
                         return self.sell_market(instrument, abs(size), label=f"close_{instrument.lower()}", reduce_only=True)
                     else:
                         return self.buy_market(instrument, abs(size), label=f"close_{instrument.lower()}", reduce_only=True)
-            # No position found
             return {"order": {"order_id": "none", "order_state": "filled", "filled_amount": 0, "average_price": 0, "price": 0, "amount": 0}}
         except Exception as exc:
             raise AriaXAPIError("close_position", -1, str(exc))
+
+    def set_leverage(self, instrument: str, leverage: int) -> dict:
+        """
+        Set leverage for symbol - AriaX supports 1-100x depending on symbol
+        Uses v5 endpoint POST /v5/position/set-leverage
+        """
+        try:
+            ts = str(int(time.time() * 1000))
+            recv = "5000"
+            body = {
+                "category": "linear",
+                "symbol": instrument,
+                "buyLeverage": str(leverage),
+                "sellLeverage": str(leverage),
+            }
+            import json as js
+            body_str = js.dumps(body, separators=(",", ":"))
+            sig = self._sign_v5(ts, recv, body_str)
+            headers = self._headers_v5(ts, recv, sig)
+            for base in [self.base, self.fallback]:
+                if not base:
+                    continue
+                try:
+                    resp = self._http.post(base + "/v5/position/set-leverage", json=body, headers=headers)
+                    data = resp.json()
+                    if data.get("retCode") == 0:
+                        log.info(f"Set leverage {instrument} to {leverage}x")
+                        return data
+                    else:
+                        log.warning(f"set_leverage failed {instrument} {leverage}: {data}")
+                except Exception as e:
+                    log.debug(f"set_leverage exception {instrument}: {e}")
+                    continue
+            # Fallback: try legacy? No legacy leverage endpoint, so just log
+            return {"retCode": -1, "retMsg": "failed"}
+        except Exception as exc:
+            log.warning(f"set_leverage error {instrument}: {exc}")
+            return {"retCode": -1, "retMsg": str(exc)}
 
     # ── Financial reporting stubs ───────────────────────────────────────
     def trades_by_order(self, order_id: str) -> List[dict]:
