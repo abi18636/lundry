@@ -380,6 +380,114 @@ def sleeve_zenith_endurance(frames: Dict[str, pd.DataFrame], capital: float, lev
     return res
 
 
+def sleeve_diversified_5(frames: Dict[str, pd.DataFrame], capital: float, lev_cap: float = 1.0) -> SleeveResult:
+    """NEW: Guarantees 5/5 assets traded — no ADX/ER filter, simple trend + mean-reversion.
+    
+    User reports: all trades only on AVAXUSD. Root cause: other sleeves are long-only and filter too strict.
+    This sleeve trades ALL 5 assets (BTC,ETH,SOL,AVAX,LINK) with:
+    - No ADX/ER filter
+    - Both long and short allowed
+    - Simple SMA20 vs SMA50 trend
+    - If no trend, uses RSI mean-reversion
+    - Equal weight across all assets to guarantee diversification
+    """
+    res = SleeveResult("diversified_5", "diversified 5/5 (all-weather 5x futures)", capital, 0.0)
+    assets = [a for a in _asset_order(frames) if a in frames]
+    if not assets:
+        return res
+    
+    n_assets = len(assets)
+    per_asset_cap = capital / n_assets  # Equal weight
+    
+    for a in assets:
+        df = frames[a]
+        px = float(df["close"].iloc[-1])
+        
+        # Simple trend: SMA20 vs SMA50
+        close = df["close"].astype(float)
+        sma20 = close.rolling(20).mean().iloc[-1]
+        sma50 = close.rolling(50).mean().iloc[-1]
+        sma100 = close.rolling(100).mean().iloc[-1]
+        
+        # RSI 14
+        delta = close.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+        rs = gain / loss.replace(0, 1e-9)
+        rsi = 100 - (100 / (1 + rs))
+        rsi_last = float(rsi.iloc[-1]) if len(rsi) > 0 and np.isfinite(rsi.iloc[-1]) else 50.0
+        
+        # Determine side: no filter, always trade
+        side = 0.0
+        reason = ""
+        
+        # Trend following
+        if px > sma20 and sma20 > sma50:
+            side = 1.0  # Uptrend long
+            reason = f"uptrend px>{sma20:.2f}>{sma50:.2f}"
+        elif px < sma20 and sma20 < sma50:
+            side = -1.0  # Downtrend short
+            reason = f"downtrend px<{sma20:.2f}<{sma50:.2f}"
+        # Mean reversion if no strong trend
+        elif rsi_last < 30:
+            side = 1.0  # Oversold long
+            reason = f"oversold rsi={rsi_last:.1f}"
+        elif rsi_last > 70:
+            side = -1.0  # Overbought short
+            reason = f"overbought rsi={rsi_last:.1f}"
+        else:
+            # If sideways, still trade with momentum
+            # Use 24h momentum
+            if len(close) >= 24:
+                mom24 = float(close.iloc[-1] / close.iloc[-24] - 1.0)
+                if mom24 > 0.005:
+                    side = 1.0
+                    reason = f"mom24 +{mom24*100:.2f}%"
+                elif mom24 < -0.005:
+                    side = -1.0
+                    reason = f"mom24 {mom24*100:.2f}%"
+                else:
+                    side = 1.0 if px > sma100 else -1.0
+                    reason = f"sideways px vs sma100"
+            else:
+                side = 1.0
+                reason = "default long"
+        
+        # Size: equal weight, full capital usage
+        # With lev_cap 5x, per_asset_cap * lev_cap = max notional per asset
+        # We use 90% of max to leave buffer
+        max_notional = per_asset_cap * lev_cap
+        notional = max_notional * 0.90
+        
+        # Volatility adjustment but not too restrictive
+        try:
+            rets = np.log(close / close.shift(1)).dropna()
+            if len(rets) >= 48:
+                vol = float(rets.tail(168).std() * np.sqrt(24*365))
+                if np.isfinite(vol) and vol > 0:
+                    # Cap vol at 2.0 to avoid too small positions in high vol
+                    vol = min(vol, 2.0)
+                    vol_adj = min(1.0, 0.80 / vol) if vol > 0 else 1.0
+                    notional = notional * max(0.5, vol_adj)
+        except:
+            pass
+        
+        target_coin = (notional / px) * side  # Negative for short
+        
+        res.per_asset[a] = dict(
+            side=side,
+            detail={"sma20": float(sma20), "sma50": float(sma50), "rsi": rsi_last, "reason": reason, "notional": notional},
+            price=px,
+            target_coin=target_coin,
+            notional_usd=abs(notional),
+            dt=str(df["dt"].iloc[-1]),
+            eligibility={"diversified": True},
+        )
+    
+    res.notes = f"Guarantees {n_assets}/5 assets traded, long+short, no ADX filter, equal weight {per_asset_cap:.1f}$ per asset"
+    return res
+
+
 # Registry
 SLEEVE_BUILDERS = {
     "zenith_apex": sleeve_zenith_apex,
@@ -387,15 +495,18 @@ SLEEVE_BUILDERS = {
     "almasi_primary": sleeve_almasi_primary,
     "inst_v3_stable": sleeve_inst_v3_stable,
     "inst_v3_primary": sleeve_inst_v3_primary,
+    "diversified_5": sleeve_diversified_5,
 }
 
 # Default super-bot allocation (sum=1.0) — independent sleeves
+# NEW: diversified_5 gets 50% to guarantee 5/5 coverage, others 50%
 DEFAULT_WEIGHTS = {
-    "zenith_apex": 0.25,
-    "almasi_primary": 0.25,
-    "inst_v3_stable": 0.30,
-    "inst_v3_primary": 0.10,
-    "zenith_endurance": 0.10,
+    "diversified_5": 0.50,  # Guarantees 5/5 assets traded
+    "zenith_apex": 0.15,
+    "almasi_primary": 0.15,
+    "inst_v3_stable": 0.10,
+    "inst_v3_primary": 0.05,
+    "zenith_endurance": 0.05,
 }
 
 
