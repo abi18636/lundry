@@ -89,7 +89,7 @@ def _last_side(sig: pd.Series) -> float:
     return 1.0 if v > 0 else ( -1.0 if v < 0 else 0.0)
 
 
-def _vol_notional(df: pd.DataFrame, capital: float, vol_target: float = 0.50, lev_cap: float = 1.0) -> float:
+def _vol_notional(df: pd.DataFrame, capital: float, vol_target: float = 1.0, lev_cap: float = 1.0) -> float:
     rets = np.log(df["close"].astype(float) / df["close"].astype(float).shift(1)).dropna()
     if len(rets) < 48:
         return min(capital * 0.35, capital * lev_cap)
@@ -208,8 +208,8 @@ def sleeve_zenith_apex(frames: Dict[str, pd.DataFrame], capital: float, lev_cap:
     for a in assets:
         px = float(frames[a]["close"].iloc[-1])
         cap_c, cap_i = capital * 0.80, capital * 0.20
-        nt_c = min(_vol_notional(frames[a], cap_c, 0.50, lev_cap), cap_c * lev_cap / nc) if cs[a] else 0.0
-        nt_i = min(_vol_notional(frames[a], cap_i, 0.50, lev_cap), cap_i * lev_cap / ni) if ins[a] else 0.0
+        nt_c = min(_vol_notional(frames[a], cap_c, 1.00, lev_cap), cap_c * lev_cap / nc) if cs[a] else 0.0
+        nt_i = min(_vol_notional(frames[a], cap_i, 1.00, lev_cap), cap_i * lev_cap / ni) if ins[a] else 0.0
         notional = nt_c + nt_i
         res.per_asset[a] = dict(
             side=1.0 if notional > 0 else 0.0,
@@ -262,7 +262,7 @@ def sleeve_almasi_primary(frames: Dict[str, pd.DataFrame], capital: float, lev_c
         coin = 0.0
         detail = {"TQ": tq_sides.get(a, 0.0), "VQ": vq_sides.get(a, 0.0)}
         if tq_sides.get(a, 0) > 0:
-            ntl = min(_vol_notional(frames[a], cap_tq, 0.50, lev_cap), cap_tq * lev_cap / n_tq)
+            ntl = min(_vol_notional(frames[a], cap_tq, 1.00, lev_cap), cap_tq * lev_cap / n_tq)
             coin += ntl / px
         if a in vq_sides and vq_sides[a] > 0:
             # VQ lab used fixed notional_frac ~0.45 of its sleeve with max 2 pos
@@ -303,10 +303,10 @@ def sleeve_inst_v3_stable(frames: Dict[str, pd.DataFrame], capital: float, lev_c
         px = float(frames[a]["close"].iloc[-1])
         coin = 0.0
         if sp[a] > 0:
-            ntl = min(_vol_notional(frames[a], cap_p, 0.50, lev_cap), cap_p * lev_cap / np_)
+            ntl = min(_vol_notional(frames[a], cap_p, 1.00, lev_cap), cap_p * lev_cap / np_)
             coin += ntl / px
         if sb[a] > 0:
-            ntl = min(_vol_notional(frames[a], cap_b, 0.50, lev_cap), cap_b * lev_cap / nb_)
+            ntl = min(_vol_notional(frames[a], cap_b, 1.00, lev_cap), cap_b * lev_cap / nb_)
             coin += ntl / px
         res.per_asset[a] = dict(
             side=1.0 if coin > 0 else 0.0,
@@ -339,7 +339,7 @@ def sleeve_inst_v3_primary(frames: Dict[str, pd.DataFrame], capital: float, lev_
         px = float(frames[a]["close"].iloc[-1])
         coin = 0.0
         if sides[a] > 0:
-            ntl = min(_vol_notional(frames[a], capital, 0.50, lev_cap), capital * lev_cap / n_long)
+            ntl = min(_vol_notional(frames[a], capital, 1.00, lev_cap), capital * lev_cap / n_long)
             coin = ntl / px
         res.per_asset[a] = dict(
             side=sides[a], detail={"primary": sides[a]}, price=px,
@@ -371,7 +371,7 @@ def sleeve_zenith_endurance(frames: Dict[str, pd.DataFrame], capital: float, lev
         px = float(frames[a]["close"].iloc[-1])
         coin = 0.0
         if sides[a] > 0:
-            ntl = min(_vol_notional(frames[a], capital, 0.50, lev_cap), capital * lev_cap / n_long)
+            ntl = min(_vol_notional(frames[a], capital, 1.00, lev_cap), capital * lev_cap / n_long)
             coin = ntl / px
         res.per_asset[a] = dict(
             side=sides[a], detail={"impulse": sides[a]}, price=px,

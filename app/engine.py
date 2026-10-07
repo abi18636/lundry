@@ -767,6 +767,19 @@ class TradingEngine:
                 desired = max(0.0, desired)
             if latched:
                 desired = 0.0
+
+            # Workaround for AriaX bug: long positions cannot be reduced (sell fails qty exceeds)
+            # If we have long and desired is smaller but still long, keep current to avoid buggy sell
+            # This prevents below_exchange_minimum and order_error_backoff blocking
+            if current > 0 and desired > 0 and desired < current:
+                # Only allow reduction if delta is large enough (>20% of position) to avoid small rebalances
+                # And only if exchange is not known to have bug - for AriaX, skip reductions
+                if "ariax" in s.ariax_base_url.lower() or "dryclean" in s.ariax_base_url.lower():
+                    # For AriaX, avoid reductions that trigger qty exceeds bug
+                    # Keep current position unless desired is 0 (full close) or significantly larger
+                    if abs(desired - current) / current < 0.5:  # Less than 50% change
+                        desired = current
+                        log.info(f"AriaX workaround: keeping {a} at {current} instead of reducing to {b.get('target_coin')} to avoid qty exceeds bug")
             timestamp = book.get("timestamp")
             age = max(0, (now_ms-float(timestamp))/1000) if timestamp else None
             state = str(book.get("state") or "unknown").lower()
