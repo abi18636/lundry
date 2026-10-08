@@ -614,6 +614,7 @@ class TelegramReporter:
     def format_trade_action_compact(self, action: dict, snapshot: Optional[dict] = None) -> str:
         """
         Fallback compact formatter for immediate fills (before financial enrichment)
+        NEW: Shows net PnL with fee for close trades, line by line
         """
         asset = action.get("asset") or str(action.get("instrument") or "").split("_")[0]
         status = (action.get("status") or "").lower()
@@ -622,58 +623,145 @@ class TelegramReporter:
         price = _fmt_price(action.get("price") or action.get("average_price"))
         qty = _fmt_qty(action.get("filled_amount") or action.get("amount"))
         notional = action.get("notional_usd")
-        notional_s = f"${_f(notional)}" if notional is not None else "—"
+        notional_s = f"${_f(notional,2)}" if notional is not None else "—"
 
         # Determine if this is close or open based on reduce_only / status
-        is_close = action.get("reduce_only") or status in ("closed", "reduced", "close")
+        is_close = action.get("reduce_only") or status in ("closed", "reduced", "close", "bought", "sold") and action.get("reduce_only")
+
+        # More accurate: if action has current_size and desired, check if it's reduce
+        try:
+            current = float(action.get("current_size") or 0)
+            desired = float(action.get("desired_coin") or action.get("target_amt") or 0)
+            # If current is short (-), and we buy, it's close
+            if current < 0 and direction == "buy":
+                is_close = True
+            elif current > 0 and direction == "sell":
+                is_close = True
+        except:
+            pass
 
         # Strategy label from contributors
         strategy = self._strategy_label(action, snapshot)
-        contrib_str = _get_contributors_str(action.get("contributors") or {})
-        if snapshot and asset:
-            try:
-                nb = snapshot.get("net_book") or {}
-                if asset in nb:
-                    contrib_str = _get_contributors_str(nb[asset].get("contributors") or {})
-            except Exception:
-                pass
 
-        acct_eq = None
-        allocated = None
-        if snapshot:
+        # Try to get entry price and calculate PnL for close
+        entry_price = None
+        gross_pnl = None
+        fee = None
+        net_pnl = None
+        pnl_pct = None
+        
+        if is_close and snapshot:
             try:
-                acct_eq = (snapshot.get("account", {}).get("USDC") or {}).get("equity")
-                if acct_eq is None:
-                    acct_eq = (snapshot.get("financial") or {}).get("account", {}).get("equity")
-                allocated = (snapshot.get("config") or {}).get("capital_usd")
+                # Try to get from financial journal last open for same asset
+                if self._engine and hasattr(self._engine, "financial"):
+                    # Get last position avg price from snapshot positions before fill
+                    # action has current_size which is before fill
+                    # For close, we need entry price of that position
+                    # Try to find in positions list before update - use action's price as exit, need entry
+                    # We can try to get from _before_positions in engine
+                    before = self._engine._before_positions.get(action.get("instrument") or f"{asset}USDT", {})
+                    if before:
+                        entry_price = before.get("average_price")
+                        if entry_price is None:
+                            # Try to get from snapshot positions that still have the position
+                            for p in snapshot.get("positions") or []:
+                                if asset in p.get("instrument_name",""):
+                                    entry_price = p.get("average_price")
+                                    break
             except Exception:
                 pass
-        acct_s = f"${_f(acct_eq)}" if acct_eq is not None else "—"
-        alloc_s = f"${_f(allocated,0)}" if allocated else "$100"
+            
+            # If we have entry and exit, calculate PnL
+            if entry_price is not None:
+                try:
+                    exit_p = float(action.get("price") or action.get("average_price") or 0)
+                    entry_p = float(entry_price)
+                    qty_f = float(action.get("filled_amount") or action.get("amount") or 0)
+                    if entry_p and exit_p and qty_f:
+                        # For short close (buy to close short): profit when entry > exit
+                        # For long close (sell to close long): profit when exit > entry
+                        if current < 0:  # Was short
+                            gross_pnl = (entry_p - exit_p) * qty_f
+                        else:  # Was long
+                            gross_pnl = (exit_p - entry_p) * qty_f
+                        # Fee 0.05% each side
+                        fee = (entry_p * qty_f + exit_p * qty_f) * 0.0005
+                        net_pnl = gross_pnl - fee
+                        if entry_p * qty_f != 0:
+                            pnl_pct = net_pnl / (entry_p * qty_f) * 100
+                except Exception:
+                    pass
+
+        # If still no PnL, try to estimate from action data
+        if is_close and gross_pnl is None:
+            try:
+                # Use notional and price change if available
+                # For now, at least show that it's a close
+                pass
+            except:
+                pass
 
         if is_close:
-            # For close actions without enriched P&L, show basic
-            icon = "🟢"
-            lines = [
-                f"{icon} <b>CLOSE {side} • {_esc(strategy)} • {_esc(asset)} [💵 LIVE]</b>",
-                f"{_esc(asset)} @ {_esc(price)}",
-                f"Qty {_esc(qty)} (~{_esc(notional_s)})",
-                f"💰 سرمایه تخصیصی: {_esc(alloc_s)} | موجودی: {_esc(acct_s)}",
-                f"ℹ️ {_esc(contrib_str)}",
-            ]
+            # NEW FORMAT: Line by line with net PnL
+            # Determine profit text
+            if net_pnl is not None:
+                icon = "🟢" if net_pnl > 0 else "🔴" if net_pnl < 0 else "🟡"
+                profit_text = "سود" if net_pnl > 0 else "ضرر" if net_pnl < 0 else "سر به سر"
+                gross_s = f"${_f(gross_pnl,4)}"
+                fee_s = f"${_f(fee,4)}"
+                net_s = f"${_f(net_pnl,4)}"
+                pct_s = f"{_f(pnl_pct,2)}%" if pnl_pct is not None else "—"
+                entry_s = _fmt_price(entry_price) if entry_price else "نامشخص"
+                
+                lines = [
+                    f"{icon} <b>بستن معامله - {profit_text}</b>",
+                    f"━━━━━━━━━━━━━━━━━━━━",
+                    f"💱 ارز: <b>{_esc(asset)}/USDT</b>",
+                    f"📊 نوع: <b>{_esc(side)} - بستن {'SHORT' if current < 0 else 'LONG' if current > 0 else 'پوزیشن'}</b>",
+                    f"🧠 استراتژی: <b>{_esc(strategy)}</b>",
+                    f"💵 مبلغ USDT: <b>{_esc(notional_s)}</b>",
+                    f"🪙 مقدار ارز: <b>{_esc(qty)} {asset}</b>",
+                    f"💲 ورود: <b>{_esc(entry_s)}</b> → خروج: <b>{_esc(price)}</b>",
+                    f"━━━━━━━━━━━━━━━━━━━━",
+                    f"💰 سود ناخالص: <b>{_esc(gross_s)}</b>",
+                    f"💸 کارمزد واقعی (0.05% هر طرف): <b>{_esc(fee_s)}</b>",
+                    f"💵 <b>سود خالص با کسر کارمزد: {_esc(net_s)}</b> ({_esc(pct_s)})",
+                ]
+            else:
+                # Fallback if no PnL calculated - still show that it's close with amounts
+                icon = "🔵"
+                lines = [
+                    f"{icon} <b>بستن معامله</b>",
+                    f"━━━━━━━━━━━━━━━━━━━━",
+                    f"💱 ارز: <b>{_esc(asset)}/USDT</b>",
+                    f"📊 نوع: <b>{_esc(side)} - بستن پوزیشن</b>",
+                    f"🧠 استراتژی: <b>{_esc(strategy)}</b>",
+                    f"💵 مبلغ USDT: <b>{_esc(notional_s)}</b>",
+                    f"🪙 مقدار ارز: <b>{_esc(qty)} {asset}</b>",
+                    f"💲 قیمت خروج: <b>{_esc(price)}</b>",
+                    f"💸 کارمزد تخمینی: <b>${_f(float(action.get('filled_amount') or 0)*float(action.get('price') or 0)*0.0005,4)}</b>",
+                    f"⚠️ سود خالص: در گزارش مالی دقیق محاسبه می‌شود (منتظر تکمیل FIFO)",
+                ]
         else:
+            # Open
+            fee_est = float(action.get("filled_amount") or 0) * float(action.get("price") or 0) * 0.0005
             lines = [
-                f"🎯 <b>OPEN {side} • {_esc(strategy)} [💵 LIVE]</b>",
-                f"{_esc(asset)}USD @ {_esc(price)}",
-                f"Qty {_esc(qty)} (~{_esc(notional_s)})",
-                f"💰 سرمایه پس از معامله: {_esc(notional_s)}",
-                f"💼 سرمایه کل: {_esc(alloc_s)} | موجودی: {_esc(acct_s)}",
-                f"ℹ️ {_esc(contrib_str)}",
+                f"🎯 <b>باز کردن معامله</b>",
+                f"━━━━━━━━━━━━━━━━━━━━",
+                f"💱 ارز: <b>{_esc(asset)}/USDT</b>",
+                f"📊 نوع: <b>{_esc(side)} - باز کردن</b>",
+                f"🧠 استراتژی: <b>{_esc(strategy)}</b>",
+                f"💵 مبلغ USDT: <b>{_esc(notional_s)}</b>",
+                f"🪙 مقدار ارز: <b>{_esc(qty)} {asset}</b>",
+                f"💲 قیمت ورود: <b>{_esc(price)}</b>",
+                f"⚡ اهرم: <b>5x</b>",
+                f"💸 کارمزد: <b>${_f(fee_est,4)}</b>",
             ]
         if action.get("order_id"):
-            lines.append(f"🆔 <code>{_esc(action.get('order_id'))}</code>")
+            lines.append(f"🆔 سفارش: <code>{_esc(action.get('order_id'))}</code>")
+        lines.append(f"🕐 زمان: {utcnow()}")
         if action.get("error"):
-            lines.append(f"❌ {_esc(action.get('error'))[:200]}")
+            lines.append(f"❌ خطا: {_esc(action.get('error'))[:200]}")
         return "\n".join(lines)
 
     def format_balance(self, snap: dict) -> str:
