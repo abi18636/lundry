@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     loop_seconds: int = 60
     max_notional_usd: float = 400.0
     min_notional_usd: float = 10.0
-    rebalance_notional_usd: float = Field(default=1.0, ge=0)
+    rebalance_notional_usd: float = Field(default=5.0, ge=0)  # Increased to 5.0 to match exchange minNotional 5$ for LINK/AVAX
     market_data_max_age_seconds: int = Field(default=180, ge=10)
     max_signal_no_trade_hours: float = Field(default=6.0, gt=0)
     max_spread_bps: float = Field(default=200.0, gt=0)

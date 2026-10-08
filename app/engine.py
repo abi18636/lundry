@@ -1004,8 +1004,18 @@ class TradingEngine:
             return filled
         except Exception as exc:
             ambiguous = not isinstance(exc, DeribitAPIError) or exc.code in ("transport", "protocol", 500, 502, 503, 504, 10001)
+            # Include actual error in reason for better telegram reporting
+            err_msg = str(exc)[:200]
+            if "notional below minimum" in err_msg.lower():
+                reason_msg = f"حداقل ارزش سفارش 5$ است: {err_msg} - پوزیشن نزدیک هدف است"
+            elif "qty exceeds" in err_msg.lower():
+                reason_msg = f"باگ صرافی: {err_msg} - کاهش پوزیشن long ممکن نیست"
+            elif "below" in err_msg.lower() and "minimum" in err_msg.lower():
+                reason_msg = f"مقدار کمتر از حداقل صرافی: {err_msg}"
+            else:
+                reason_msg = f"{err_msg} (No blind retry)"
             action.update(status="execution_uncertain" if ambiguous else "error", error=str(exc),
-                          error_code=getattr(exc, "code", None), reason="No blind retry or fallback close")
+                          error_code=getattr(exc, "code", None), reason=reason_msg)
             if not ambiguous:
                 self.state.pending_order = None
                 self._backoffs[action["instrument"]] = {"retry_after": time.time()+600, "error": str(exc)}

@@ -100,6 +100,16 @@ def plan_rebalance(current: float, desired: float, price: float, step: float,
         else:
             p.status = "below_exchange_minimum"
             p.reason = "Rebalance delta is smaller than exchange minimum"
+    elif p.amount * price < 5.0:  # Exchange minNotional is 5$ for all linear perps (LINK, AVAX etc)
+        # If notional < 5$, consider it target_reached to avoid notional below minimum error
+        # This prevents No blind retry or fallback close errors
+        if abs(p.delta) / max(abs(current), 1) < 0.05:  # Less than 5% change
+            p.status = "target_reached"
+            p.reason = f"Position close enough (delta {p.delta:.4f}, notional {p.amount*price:.2f}$ < 5$ min)"
+            p.amount = 0
+        else:
+            p.status = "skip_small"
+            p.reason = f"Notional {p.amount*price:.2f}$ < 5$ exchange minimum, skip"
     elif p.intent in ("increase", "reduce") and p.amount * price < max(0, rebalance_threshold):
         p.status = "skip_small"
         p.reason = "Rebalance hysteresis; no forced up-sizing"
