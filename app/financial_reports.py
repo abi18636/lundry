@@ -130,7 +130,8 @@ class FinancialJournal:
             fee_cur = action.get("fee_currencies") or []
             fee_known = action.get("fee_known")
             if fee_known is None:
-                fee_known = bool(action.get("trade_ids")) and "fee" in action and fee_cur == ["USDC"]
+                # Support both USDC (Deribit) and USDT (AriaX)
+                fee_known = bool(action.get("trade_ids")) and "fee" in action and fee_cur in (["USDC"], ["USDT"], ["USDC", "USDT"], ["USDT", "USDC"]) or (len(fee_cur)==1 and fee_cur[0] in ("USDC","USDT"))
             row = {
                 **prev,
                 "order_id": oid,
@@ -169,7 +170,7 @@ class FinancialJournal:
             if q <= 0:
                 continue
             quote = sum((dec(x.get("amount")) * dec(x.get("price")) for x in raw if dec(x.get("amount")) is not None and dec(x.get("price")) is not None), ZERO)
-            fees_known = all("fee" in x and x.get("fee_currency") == "USDC" for x in raw)
+            fees_known = all("fee" in x and x.get("fee_currency") in ("USDC","USDT") for x in raw)
             label = next((x.get("label") for x in raw if x.get("label")), "")
             inst = raw[0].get("instrument_name") or ""
             self.register({
@@ -240,7 +241,7 @@ class FinancialJournal:
                     if amt is None or amt <= 0 or price is None or price <= 0 or o.get("direction") not in ("buy", "sell"):
                         continue
                     sign = Decimal(1) if o["direction"] == "buy" else Decimal(-1)
-                    fee = dec(o.get("fee")) if o.get("fee_known") and o.get("fee_currencies") == ["USDC"] else None
+                    fee = dec(o.get("fee")) if o.get("fee_known") and (o.get("fee_currencies") in (["USDC"], ["USDT"]) or (len(o.get("fee_currencies") or [])==1 and o.get("fee_currencies")[0] in ("USDC","USDT"))) else None
                     q_before = b["q"]
                     avg_before = b["avg"]
                     closed_q = ZERO

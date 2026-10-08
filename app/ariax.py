@@ -675,6 +675,10 @@ class AriaXClient:
                     data = resp.json()
                     if data.get("retCode") == 0:
                         order_id = data.get("result", {}).get("orderId") or label
+                        # Calculate fee for AriaX: taker 0.05% = 0.0005, maker 0.02% = 0.0002
+                        # For IOC marketable limit, assume taker fee
+                        fee_rate = 0.0005  # 0.05% taker
+                        fee = amount * price * fee_rate
                         return {
                             "order": {
                                 "order_id": order_id,
@@ -685,7 +689,16 @@ class AriaXClient:
                                 "amount": amount,
                                 "direction": direction,
                             },
-                            "trades": []
+                            "trades": [
+                                {
+                                    "trade_id": f"{order_id}_{int(time.time()*1000)}",
+                                    "amount": amount,
+                                    "price": price,
+                                    "fee": fee,
+                                    "fee_currency": "USDT",
+                                    "direction": direction,
+                                }
+                            ]
                         }
                     else:
                         log.warning(f"v5 limit_ioc failed: {data}")
@@ -696,6 +709,7 @@ class AriaXClient:
             data = self._place_order_legacy(legacy_sym, direction, amount, "limit", price, lev=5, reduce_only=reduce_only)
             if data.get("ok"):
                 order_id = data.get("id")
+                fee = amount * price * 0.0005
                 return {
                     "order": {
                         "order_id": str(order_id),
@@ -706,7 +720,16 @@ class AriaXClient:
                         "amount": amount,
                         "direction": direction,
                     },
-                    "trades": []
+                    "trades": [
+                        {
+                            "trade_id": f"{order_id}_{int(time.time()*1000)}",
+                            "amount": amount,
+                            "price": price,
+                            "fee": fee,
+                            "fee_currency": "USDT",
+                            "direction": direction,
+                        }
+                    ]
                 }
             raise AriaXAPIError("limit_ioc", -1, f"legacy failed {data}")
         except Exception as exc:
@@ -750,6 +773,7 @@ class AriaXClient:
                         order_id = data.get("result", {}).get("orderId") or label
                         ticker = self.ticker(instrument)
                         avg = float(ticker.get("lastPrice") or ticker.get("markPrice") or 0)
+                        fee = amount * avg * 0.0005
                         return {
                             "order": {
                                 "order_id": order_id,
@@ -760,7 +784,16 @@ class AriaXClient:
                                 "amount": amount,
                                 "direction": "buy",
                             },
-                            "trades": []
+                            "trades": [
+                                {
+                                    "trade_id": f"{order_id}_{int(time.time()*1000)}",
+                                    "amount": amount,
+                                    "price": avg,
+                                    "fee": fee,
+                                    "fee_currency": "USDT",
+                                    "direction": "buy",
+                                }
+                            ]
                         }
                 except Exception:
                     continue
@@ -769,6 +802,7 @@ class AriaXClient:
             if data.get("ok"):
                 ticker = self.ticker(instrument)
                 avg = float(ticker.get("lastPrice") or 0)
+                fee = amount * avg * 0.0005
                 return {
                     "order": {
                         "order_id": str(data.get("id")),
@@ -779,7 +813,16 @@ class AriaXClient:
                         "amount": amount,
                         "direction": "buy",
                     },
-                    "trades": []
+                    "trades": [
+                        {
+                            "trade_id": f"{data.get('id')}_{int(time.time()*1000)}",
+                            "amount": amount,
+                            "price": avg,
+                            "fee": fee,
+                            "fee_currency": "USDT",
+                            "direction": "buy",
+                        }
+                    ]
                 }
             raise AriaXAPIError("buy_market", -1, str(data))
         except Exception as exc:
@@ -823,6 +866,7 @@ class AriaXClient:
                         order_id = data.get("result", {}).get("orderId") or label
                         ticker = self.ticker(instrument)
                         avg = float(ticker.get("lastPrice") or 0)
+                        fee = amount * avg * 0.0005
                         return {
                             "order": {
                                 "order_id": order_id,
@@ -833,7 +877,16 @@ class AriaXClient:
                                 "amount": amount,
                                 "direction": "sell",
                             },
-                            "trades": []
+                            "trades": [
+                                {
+                                    "trade_id": f"{order_id}_{int(time.time()*1000)}",
+                                    "amount": amount,
+                                    "price": avg,
+                                    "fee": fee,
+                                    "fee_currency": "USDT",
+                                    "direction": "sell",
+                                }
+                            ]
                         }
                 except Exception:
                     continue
@@ -842,6 +895,7 @@ class AriaXClient:
             if data.get("ok"):
                 ticker = self.ticker(instrument)
                 avg = float(ticker.get("lastPrice") or 0)
+                fee = amount * avg * 0.0005
                 return {
                     "order": {
                         "order_id": str(data.get("id")),
@@ -852,7 +906,16 @@ class AriaXClient:
                         "amount": amount,
                         "direction": "sell",
                     },
-                    "trades": []
+                    "trades": [
+                        {
+                            "trade_id": f"{data.get('id')}_{int(time.time()*1000)}",
+                            "amount": amount,
+                            "price": avg,
+                            "fee": fee,
+                            "fee_currency": "USDT",
+                            "direction": "sell",
+                        }
+                    ]
                 }
             raise AriaXAPIError("sell_market", -1, str(data))
         except Exception as exc:

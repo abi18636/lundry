@@ -410,6 +410,14 @@ class TelegramReporter:
         lev = ev.get("leverage") or 5
 
         icon = "🟢" if side_raw == "buy" else "🔴"
+        # Ensure fee is calculated if not provided: 0.05% taker
+        if fee is None:
+            try:
+                fee_val = float(notional or 0) * 0.0005
+                fee_s = f"${_f(fee_val,4)} (تخمینی 0.05%)"
+            except:
+                fee_s = "نامشخص"
+        
         lines = [
             f"{icon} <b>معامله جدید - {trade_type}</b>",
             f"━━━━━━━━━━━━━━━━━━━━",
@@ -420,7 +428,7 @@ class TelegramReporter:
             f"🪙 مقدار ارز: <b>{_esc(coin_s)}</b>",
             f"💲 قیمت ورود: <b>{_esc(price)}</b>",
             f"⚡ اهرم: <b>{lev}x</b>",
-            f"💸 کارمزد: {_esc(fee_s)}",
+            f"💸 کارمزد: <b>{_esc(fee_s)}</b>",
         ]
         if ev.get("order_id"):
             lines.append(f"🆔 سفارش: <code>{_esc(ev.get('order_id'))}</code>")
@@ -500,9 +508,36 @@ class TelegramReporter:
 
         # Format amounts
         gross_s = f"${_f(gross,4)}" if gross is not None else "نامشخص"
-        fee_s = f"${_f(total_fee,4)}" if total_fee is not None else ("$" + _f(paid_fee,4) if paid_fee is not None else "نامشخص")
+        # Ensure fee is calculated if None - estimate 0.05% taker for both entry and exit
+        if total_fee is None:
+            try:
+                # Estimate fee as 0.05% of notional for entry + exit
+                entry_notional = float(entry_price or 0) * float(closed_qty or 0)
+                exit_notional = float(exit_price or 0) * float(closed_qty or 0)
+                total_fee = (entry_notional + exit_notional) * 0.0005
+                fee_s = f"${_f(total_fee,4)} (تخمینی 0.05% هر طرف)"
+            except:
+                fee_s = "نامشخص"
+        else:
+            fee_s = f"${_f(total_fee,4)}"
+        
+        # Ensure net is calculated if None
+        if net is None and gross is not None and total_fee is not None:
+            try:
+                net = float(gross) - float(total_fee)
+            except:
+                pass
+        
         net_s = f"${_f(net,4)}" if net is not None else "نامشخص"
         ret_s = f"{_f(return_pct,2)}%" if return_pct is not None else "—"
+        if return_pct is None and net is not None and entry_price is not None and closed_qty is not None:
+            try:
+                entry_basis = float(entry_price) * float(closed_qty)
+                if entry_basis != 0:
+                    ret_s = f"{(float(net)/entry_basis*100):+.2f}%"
+            except:
+                pass
+        
         closed_s = _fmt_qty(closed_qty)
         
         # USDT and coin amounts
@@ -525,8 +560,8 @@ class TelegramReporter:
             f"💵 <b>سود خالص با کسر کارمزد: {_esc(net_s)}</b> ({_esc(ret_s)})",
         ]
         
-        if capital_after is not None:
-            lines.append(f"📦 سرمایه پس از بستن: ${_f(capital_after,2)}")
+        # Remove سرمایه پس از معامله که هیچ چیزی را نشان نمیدهد - per user request
+        # Instead show net profit clearly
         
         if ev.get("order_id"):
             lines.append(f"🆔 سفارش: <code>{_esc(ev.get('order_id'))}</code>")
