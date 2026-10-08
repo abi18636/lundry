@@ -14,9 +14,9 @@ services:
       - key: ARIAX_FALLBACK_URL
         value: https://dryclean-app-1.onrender.com
       - key: ARIAX_API_KEY
-        value: arx-1863bd58c4fe42d032f62d46985a592a
+        value: arx-karoon177-fixed-9d4e7c1a
       - key: ARIAX_API_SECRET
-        value: Abr1N1Hpbh080Wq_JdwHcqi7SaGOpifQw61-e-5eZTg
+        value: Kf9mWx2vQz7RtN4pZb8LhY3jT6sEgUa5cHn1oPzIkM0yBvVXe
       - key: TRADING_ENABLED
         value: "true"
       - key: DRY_RUN

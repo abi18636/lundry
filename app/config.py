@@ -18,8 +18,8 @@ class Settings(BaseSettings):
 
     # AriaX Testnet - NEW EXCHANGE
     ariax_base_url: str = Field(default="https://dryclean-app-1.onrender.com", description="AriaX base URL")
-    ariax_api_key: str = Field(default="arx-1863bd58c4fe42d032f62d46985a592a")
-    ariax_api_secret: str = Field(default="Abr1N1Hpbh080Wq_JdwHcqi7SaGOpifQw61-e-5eZTg")
+    ariax_api_key: str = Field(default="arx-karoon177-fixed-9d4e7c1a")
+    ariax_api_secret: str = Field(default="Kf9mWx2vQz7RtN4pZb8LhY3jT6sEgUa5cHn1oPzIkM0yBvVXe")
     # Fallback URL if primary is down (Render free tier sleeps)
     ariax_fallback_url: str = "https://dryclean-app-1.onrender.com"
 
