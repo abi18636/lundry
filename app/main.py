@@ -185,6 +185,78 @@ def healthz():
     return {"ok": True}
 
 
+@app.get("/api/trading/status")
+def trading_status(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    eng = get_engine()
+    settings = get_settings()
+    snap = eng.snapshot()
+    return {
+        "trading_enabled": settings.trading_enabled,
+        "dry_run": settings.dry_run,
+        "test_trade_enabled": getattr(settings, 'effective_test_trade_enabled', settings.test_trade_enabled),
+        "trading_ready": snap.get("diagnostics", {}).get("trading_ready"),
+        "trading_state": snap.get("diagnostics", {}).get("trading_state"),
+        "primary_blocker": snap.get("diagnostics", {}).get("primary_blocker"),
+        "active_signals": snap.get("diagnostics", {}).get("active_signal_assets"),
+        "open_markets": snap.get("diagnostics", {}).get("market_open_count"),
+        "estimated_equity": snap.get("risk", {}).get("estimated_bot_equity"),
+        "positions_count": len(snap.get("positions") or []),
+    }
+
+
+@app.post("/api/trading/enable")
+def trading_enable(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token, control=True)
+    eng = get_engine()
+    # Enable real trading
+    eng.settings.trading_enabled = True
+    eng.settings.dry_run = False
+    eng.start()
+    return {"ok": True, "trading_enabled": True, "dry_run": False, "message": "Real trading enabled and bot started"}
+
+
+@app.post("/api/trading/disable")
+def trading_disable(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token, control=True)
+    eng = get_engine()
+    eng.settings.trading_enabled = False
+    return {"ok": True, "trading_enabled": False, "message": "Real trading disabled, only signals will be calculated"}
+
+
+@app.post("/api/trading/resume")
+def trading_resume(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    """Resume real trading after test or pause - clear test and enable trading"""
+    _check_token(authorization, x_token, control=True)
+    eng = get_engine()
+    # Close any active test trade
+    try:
+        if eng.test_trader.is_active():
+            eng.test_trader.request_close()
+    except Exception:
+        pass
+    eng.settings.trading_enabled = True
+    eng.settings.dry_run = False
+    eng.start()
+    eng.request_cycle()
+    return {"ok": True, "message": "Real trading resumed, test closed if active, bot started"}
+
+
+@app.get("/api/test-trade/enabled")
+def test_trade_enabled_check(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    s = get_settings()
+    eng = get_engine()
+    return {
+        "test_trade_enabled": getattr(s, 'effective_test_trade_enabled', s.test_trade_enabled),
+        "asset": s.test_trade_asset.upper(),
+        "hold_seconds": s.test_trade_hold_seconds,
+        "max_notional_usd": s.test_trade_max_notional_usd,
+        "is_active": eng.test_trader.is_active(),
+        "status": eng.test_trader.snapshot().get("status"),
+    }
+
+
 @app.post("/api/telegram/test")
 def telegram_test(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token, control=True)

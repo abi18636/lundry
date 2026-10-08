@@ -18,8 +18,8 @@ class Settings(BaseSettings):
 
     # AriaX Testnet - NEW EXCHANGE
     ariax_base_url: str = Field(default="https://dryclean-app-1.onrender.com", description="AriaX base URL")
-    ariax_api_key: str = Field(default="arx-7e0b45d825e434bc7056920c5a14dd68")
-    ariax_api_secret: str = Field(default="ktMHq7VBJ_dzcrK_4C73PsQtdvt3X9o-D3vPr2wrMbI")
+    ariax_api_key: str = Field(default="arx-1863bd58c4fe42d032f62d46985a592a")
+    ariax_api_secret: str = Field(default="Abr1N1Hpbh080Wq_JdwHcqi7SaGOpifQw61-e-5eZTg")
     # Fallback URL if primary is down (Render free tier sleeps)
     ariax_fallback_url: str = "https://dryclean-app-1.onrender.com"
 
@@ -72,10 +72,17 @@ class Settings(BaseSettings):
     external_state_backup_url: str = ""
     use_usdc_linear: bool = True
 
-    test_trade_enabled: bool = False
+    test_trade_enabled: bool = True  # Enabled for AriaX per user request
     test_trade_asset: str = "BTC"
     test_trade_hold_seconds: int = Field(default=60, ge=60, le=60)
     test_trade_max_notional_usd: float = Field(default=10.0, gt=0, le=10.0)
+
+    @property
+    def effective_test_trade_enabled(self) -> bool:
+        # Always enable for AriaX
+        if "ariax" in self.ariax_base_url.lower() or "dryclean" in self.ariax_base_url.lower():
+            return True
+        return self.test_trade_enabled
     telegram_bot_username: str = "TestTraid_bot"
 
     report_timezone: str = "Europe/Istanbul"

@@ -374,79 +374,73 @@ class TelegramReporter:
 
     def format_compact_open(self, ev: dict, snapshot: Optional[dict] = None) -> str:
         """
-        🎯 OPEN BUY • zenith_apex [💵 LIVE]
-        BTCUSD @ 83941.1
-        Qty 0.0001 (~$8.39)
-        💰 سرمایه پس از معامله: $8.39
-        💼 سرمایه کل: $100 | موجودی حساب: $99982.19
-        ℹ️ سیگنال تجمیعی SUPER
+        NEW FORMAT - Line by line per user request:
+        - Currency type and trade type
+        - Strategy name
+        - USDT amount -- coin amount
+        - Line by line, not all in one line
         """
         asset = ev.get("asset") or str(ev.get("instrument") or "").split("_")[0]
         side_raw = ev.get("direction") or ""
-        side = "BUY" if side_raw == "buy" else "SELL" if side_raw == "sell" else str(side_raw).upper()
+        side = "خرید LONG" if side_raw == "buy" else "فروش SHORT" if side_raw == "sell" else str(side_raw).upper()
+        # Trade type
+        trade_type = "باز کردن" if ev.get("kind") in ("open", "increase", None) else "افزایش"
+        if ev.get("position_side") == "SHORT" and side_raw == "buy":
+            trade_type = "بستن SHORT / خرید"
+        elif ev.get("position_side") == "LONG" and side_raw == "sell":
+            trade_type = "بستن LONG / فروش"
+        
         strategy = self._strategy_label(ev, snapshot)
         price = _fmt_price(ev.get("price"))
         qty = _fmt_qty(ev.get("filled_amount") or ev.get("amount"))
         notional = ev.get("execution_notional_usdc") or ev.get("notional_usd")
-        notional_s = f"${_f(notional)}" if notional is not None else "نامشخص"
-        capital_after = ev.get("position_notional_at_fill_usdc")
-        capital_after_s = f"${_f(capital_after)}" if capital_after is not None else "نامشخص"
+        notional_s = f"${_f(notional,2)}" if notional is not None else "نامشخص"
+        
+        # Coin amount
+        coin_s = f"{qty} {asset}"
+        
+        # USDT amount
+        usdt_s = notional_s
 
-        # account equity
-        acct_eq = None
-        if snapshot:
-            try:
-                acct_eq = (snapshot.get("financial") or {}).get("account", {}).get("equity")
-                if acct_eq is None:
-                    acct_eq = (snapshot.get("account", {}).get("USDC") or {}).get("equity")
-                if acct_eq is None:
-                    acct_eq = (snapshot.get("financial") or {}).get("account", {}).get("balance")
-            except Exception:
-                pass
-        acct_s = f"${_f(acct_eq)}" if acct_eq is not None else "نامشخص"
-        allocated = None
-        if snapshot:
-            allocated = (snapshot.get("config") or {}).get("capital_usd") or (snapshot.get("financial") or {}).get("allocated_capital_usdc")
-        alloc_s = f"${_f(allocated,0)}" if allocated else "$100"
+        # Fee
+        fee = ev.get("paid_fee_usdc") or ev.get("fee")
+        fee_s = f"${_f(fee,4)}" if fee is not None else "نامشخص"
 
-        contrib_str = _get_contributors_str(ev.get("contributors") or {})
-        # if we have snapshot, try better
-        if snapshot and asset:
-            try:
-                nb = snapshot.get("net_book") or {}
-                if asset in nb:
-                    contrib_str = _get_contributors_str(nb[asset].get("contributors") or {})
-            except Exception:
-                pass
+        # Leverage
+        lev = ev.get("leverage") or 5
 
-        icon = "🎯"
+        icon = "🟢" if side_raw == "buy" else "🔴"
         lines = [
-            f"{icon} <b>OPEN {side} • {_esc(strategy)} [💵 LIVE]</b>",
-            f"{_esc(asset)}USD @ {_esc(price)}",
-            f"Qty {_esc(qty)} (~{_esc(notional_s)})",
-            f"💰 سرمایه پس از معامله: <b>{_esc(capital_after_s)}</b>",
-            f"💼 سرمایه کل: {_esc(alloc_s)} | موجودی حساب: {_esc(acct_s)}",
-            f"ℹ️ {_esc(contrib_str)}",
+            f"{icon} <b>معامله جدید - {trade_type}</b>",
+            f"━━━━━━━━━━━━━━━━━━━━",
+            f"💱 ارز: <b>{_esc(asset)}/USDT</b>",
+            f"📊 نوع: <b>{_esc(side)}</b>",
+            f"🧠 استراتژی: <b>{_esc(strategy)}</b>",
+            f"💵 مبلغ USDT: <b>{_esc(usdt_s)}</b>",
+            f"🪙 مقدار ارز: <b>{_esc(coin_s)}</b>",
+            f"💲 قیمت ورود: <b>{_esc(price)}</b>",
+            f"⚡ اهرم: <b>{lev}x</b>",
+            f"💸 کارمزد: {_esc(fee_s)}",
         ]
         if ev.get("order_id"):
-            lines.append(f"🆔 <code>{_esc(ev.get('order_id'))}</code> | src={_esc(ev.get('source') or 'bot')}")
+            lines.append(f"🆔 سفارش: <code>{_esc(ev.get('order_id'))}</code>")
+        lines.append(f"🕐 زمان: {utcnow()}")
         return "\n".join(lines)
 
     def format_compact_close(self, ev: dict, snapshot: Optional[dict] = None) -> str:
         """
-        🟢 CLOSE SELL • zenith_apex • BTCUSD [💵 LIVE]
-        Entry 83941.1 → Exit 83960.3 (+0.02%)
-        💵 PnL +0.0019$ ناخالص | کارمزد $0.0083 | خالص -0.0064$ (-0.07% از $8.39)
-        📦 بسته‌شده: 0.0001 | سرمایه پس از بستن: $0.00
-        ⏱️ نگهداری: — | 💼 موجودی: $99982.19
+        NEW FORMAT - Line by line for close with net PnL after fees
+        - Currency, trade type, strategy, USDT amount, coin amount
+        - Net profit/loss with real fees deducted
         """
         asset = ev.get("asset") or str(ev.get("instrument") or "").split("_")[0]
         pos_side = ev.get("position_side") or ("LONG" if ev.get("direction") == "sell" else "SHORT")
-        # For close, side is opposite of position: if LONG closed, side SELL, if SHORT closed, BUY
         if ev.get("kind") in ("close", "reduce", "reverse", "close_unknown_basis"):
-            close_side = "SELL" if pos_side == "LONG" else "BUY"
+            close_side = "فروش" if pos_side == "LONG" else "خرید"
+            close_side_en = "SELL" if pos_side == "LONG" else "BUY"
         else:
-            close_side = "SELL" if ev.get("direction") == "sell" else "BUY"
+            close_side = "فروش" if ev.get("direction") == "sell" else "خرید"
+            close_side_en = "SELL" if ev.get("direction") == "sell" else "BUY"
 
         strategy = self._strategy_label(ev, snapshot)
 
@@ -463,7 +457,6 @@ class TelegramReporter:
                 x = float(exit_price)
                 if e != 0:
                     raw = (x - e) / e * 100
-                    # for LONG, profit when x>e, for SHORT when x<e
                     if pos_side == "SHORT":
                         raw = -raw
                     price_chg = raw
@@ -482,7 +475,6 @@ class TelegramReporter:
         closed_qty = ev.get("closed_quantity") or ev.get("filled_amount")
         capital_after = ev.get("position_notional_at_fill_usdc")
 
-        # total fee
         total_fee = None
         try:
             if entry_fee is not None and exit_fee is not None:
@@ -492,73 +484,56 @@ class TelegramReporter:
         except Exception:
             pass
 
-        # entry basis for % calc
-        entry_basis = None
-        try:
-            if entry_price is not None and closed_qty is not None:
-                entry_basis = float(entry_price) * float(closed_qty)
-        except Exception:
-            pass
-
         # icon based on net
         try:
             net_f = float(net) if net is not None else None
             if net_f is not None:
                 icon = "🟢" if net_f > 0 else "🔴" if net_f < 0 else "🟡"
+                profit_text = "سود" if net_f > 0 else "ضرر" if net_f < 0 else "سر به سر"
             else:
-                # fallback to gross
                 gross_f = float(gross) if gross is not None else 0
                 icon = "🟢" if gross_f > 0 else "🔴" if gross_f < 0 else "🟡"
+                profit_text = "سود" if gross_f > 0 else "ضرر" if gross_f < 0 else "نامشخص"
         except Exception:
             icon = "🟢"
+            profit_text = "نامشخص"
 
-        acct_eq = None
-        if snapshot:
-            try:
-                acct_eq = (snapshot.get("financial") or {}).get("account", {}).get("equity")
-                if acct_eq is None:
-                    acct_eq = (snapshot.get("account", {}).get("USDC") or {}).get("equity")
-            except Exception:
-                pass
-        acct_s = f"${_f(acct_eq)}" if acct_eq is not None else "نامشخص"
-
-        # Build lines in sample style
-        lines = [
-            f"{icon} <b>CLOSE {close_side} • {_esc(strategy)} • {_esc(asset)} [💵 LIVE]</b>",
-            f"Entry {_esc(entry_s)} → Exit {_esc(exit_s)} ({_esc(price_chg_s)})",
-        ]
-
-        # PnL line
-        gross_s = f"{_f(gross,4)}$" if gross is not None else "نامشخص"
+        # Format amounts
+        gross_s = f"${_f(gross,4)}" if gross is not None else "نامشخص"
         fee_s = f"${_f(total_fee,4)}" if total_fee is not None else ("$" + _f(paid_fee,4) if paid_fee is not None else "نامشخص")
-        net_s = f"{_f(net,4)}$" if net is not None else "نامشخص"
+        net_s = f"${_f(net,4)}" if net is not None else "نامشخص"
         ret_s = f"{_f(return_pct,2)}%" if return_pct is not None else "—"
-        basis_s = f"${_f(entry_basis)}" if entry_basis is not None else "—"
-
-        if gross is not None or net is not None:
-            lines.append(f"💵 PnL { _esc(gross_s)} ناخالص | کارمزد {_esc(fee_s)} | خالص <b>{_esc(net_s)}</b> ({_esc(ret_s)} از {_esc(basis_s)})")
-        else:
-            lines.append(f"💵 PnL نامشخص (شواهد ورود ناقص) | کارمزد {_esc(fee_s)}")
-
         closed_s = _fmt_qty(closed_qty)
-        cap_after_s = f"${_f(capital_after)}" if capital_after is not None else "—"
-        lines.append(f"📦 بسته‌شده: {_esc(closed_s)} | سرمایه پس از بستن: {_esc(cap_after_s)}")
+        
+        # USDT and coin amounts
+        usdt_amount = ev.get("execution_notional_usdc") or ev.get("notional_usd") or (float(closed_qty or 0) * float(exit_price or 0))
+        usdt_s = f"${_f(usdt_amount,2)}" if usdt_amount else "نامشخص"
+        coin_s = f"{closed_s} {asset}"
 
-        # held time if available
-        held_str = "—"
-        try:
-            # ev timestamp vs entry? we don't have entry time, use generic
-            # Could compute from order history if available, but keep —
-            pass
-        except Exception:
-            pass
-        lines.append(f"⏱️ held {held_str} | 💼 موجودی: {_esc(acct_s)}")
-
+        lines = [
+            f"{icon} <b>بستن معامله - {profit_text}</b>",
+            f"━━━━━━━━━━━━━━━━━━━━",
+            f"💱 ارز: <b>{_esc(asset)}/USDT</b>",
+            f"📊 نوع: <b>{_esc(close_side)} {pos_side} → {close_side_en}</b>",
+            f"🧠 استراتژی: <b>{_esc(strategy)}</b>",
+            f"💵 مبلغ USDT: <b>{_esc(usdt_s)}</b>",
+            f"🪙 مقدار ارز: <b>{_esc(coin_s)}</b>",
+            f"💲 ورود: <b>{_esc(entry_s)}</b> → خروج: <b>{_esc(exit_s)}</b> ({_esc(price_chg_s)})",
+            f"━━━━━━━━━━━━━━━━━━━━",
+            f"💰 سود ناخالص: <b>{_esc(gross_s)}</b>",
+            f"💸 کارمزد واقعی: <b>{_esc(fee_s)}</b>",
+            f"💵 <b>سود خالص با کسر کارمزد: {_esc(net_s)}</b> ({_esc(ret_s)})",
+        ]
+        
+        if capital_after is not None:
+            lines.append(f"📦 سرمایه پس از بستن: ${_f(capital_after,2)}")
+        
         if ev.get("order_id"):
-            lines.append(f"🆔 <code>{_esc(ev.get('order_id'))}</code> | quality={_esc(ev.get('pnl_quality') or '—')}")
-
+            lines.append(f"🆔 سفارش: <code>{_esc(ev.get('order_id'))}</code>")
+        lines.append(f"🕐 زمان: {utcnow()}")
+        
         if ev.get("pnl_quality") and ev["pnl_quality"] != "complete":
-            lines.append(f"⚠️ کیفیت محاسبه: {_esc(ev['pnl_quality'])}")
+            lines.append(f"⚠️ کیفیت: {_esc(ev['pnl_quality'])}")
 
         return "\n".join(lines)
 
@@ -1061,9 +1036,30 @@ class TelegramReporter:
             self.stats["trades_alerted"] += 1
 
         if failures:
-            text = self.format_trade_alert(failures, loop_count=loop_count, snapshot=snapshot)
-            if text:
-                self.send(text, reply_markup=self._kb())
+            # NEW: Line by line error report with currency, trade type, strategy, amounts, error reason
+            for fail in failures:
+                asset = fail.get("asset") or "نامشخص"
+                reason = fail.get("reason") or fail.get("error") or "دلیل نامشخص"
+                desired = fail.get("desired_coin")
+                current = fail.get("current_size")
+                strategy = self._strategy_label(fail, snapshot)
+                status = fail.get("status")
+                
+                # Build line-by-line error report
+                lines = [
+                    f"⚠️ <b>معامله انجام نشد</b>",
+                    f"━━━━━━━━━━━━━━━━━━━━",
+                    f"💱 ارز: <b>{_esc(asset)}/USDT</b>",
+                    f"📊 وضعیت: <b>{_esc(status)}</b>",
+                    f"🧠 استراتژی: <b>{_esc(strategy)}</b>",
+                    f"📈 هدف: { _f(desired,4) if desired is not None else '—'} | فعلی: {_f(current,4) if current is not None else '—'}",
+                    f"❌ دلیل خطا:",
+                    f"   {_esc(reason)[:500]}",
+                    f"🕐 زمان: {utcnow()}",
+                ]
+                if fail.get("order_id"):
+                    lines.append(f"🆔 سفارش: <code>{_esc(fail.get('order_id'))}</code>")
+                self.send("\n".join(lines), reply_markup=self._kb())
 
         dg = result.get("diagnostics") or {}
         opened = dg.get("market_open_count", 0)
@@ -1275,13 +1271,18 @@ class TelegramReporter:
         while not self._stop.is_set():
             try:
                 now = time.time()
+                # Every 6 hours: send full file report (as requested by user)
                 if now - self._last_full_report >= self.full_report_hours * 3600:
                     self.send_full_file_report()
                     self._last_full_report = now
-                if now - self._last_heartbeat >= self.heartbeat_minutes * 60:
-                    if self._engine:
-                        self.send(self.format_status(self._engine.snapshot()), reply_markup=self._kb())
-                    self._last_heartbeat = now
+                # If trade_only is True, don't send heartbeat status every 30 min
+                # Only send file reports every 6 hours + trade reports immediately
+                # Dashboard telegram remains same (user can request via panel)
+                if not self.trade_only:
+                    if now - self._last_heartbeat >= self.heartbeat_minutes * 60:
+                        if self._engine:
+                            self.send(self.format_status(self._engine.snapshot()), reply_markup=self._kb())
+                        self._last_heartbeat = now
             except Exception:
                 log.exception("bg")
             self._stop.wait(20)

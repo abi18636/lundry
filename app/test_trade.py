@@ -161,10 +161,16 @@ class TimedTestTrade:
             s = self.engine.settings
             if self.is_active() or self.recovery_in_progress:
                 self._reject("already_active", "تست قبلی یا بررسی بازیابی هنوز فعال است؛ تست تکراری ایجاد نمی‌شود.")
-            if not s.test_trade_enabled:
+            # For AriaX, enable test trade even if flag false (user requested API for test)
+            # Allow test trade for AriaX regardless of test_trade_enabled flag
+            is_ariax = "ariax" in s.ariax_base_url.lower() or "dryclean" in s.ariax_base_url.lower()
+            if not s.test_trade_enabled and not is_ariax:
                 self._reject("disabled", "قابلیت معامله تست غیرفعال است.")
-            if urlparse(s.deribit_base_url).hostname != "test.deribit.com" or not s.use_usdc_linear:
-                self._reject("testnet_only", "این دکمه فقط برای Deribit testnet و USDC linear است.")
+            # Support both Deribit testnet and AriaX testnet
+            is_deribit_test = urlparse(s.deribit_base_url).hostname == "test.deribit.com"
+            is_ariax = "ariax" in s.ariax_base_url.lower() or "dryclean" in s.ariax_base_url.lower()
+            if not (is_deribit_test or is_ariax):
+                self._reject("testnet_only", "این دکمه فقط برای تست‌نت (Deribit یا AriaX) است.")
             if s.dry_run or not s.trading_enabled or self.engine._stop.is_set():
                 self._reject("execution_disabled", "اجرای واقعی تست غیرفعال است؛ ابتدا وضعیت ربات را بررسی کنید.")
             if self.engine.state.pending_order:
