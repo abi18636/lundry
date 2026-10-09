@@ -864,10 +864,10 @@ class TradingEngine:
                                   notional_usd=abs(plan.target)*px, status=plan.status, reason=plan.reason,
                                   minimum_amount=minimum, contract_size=step)
                     if plan.status == "planned":
-                        # Cooldown: 15 min to allow intraday but prevent flipping every minute
-                        # Previous 1h and 30min caused no trades after strict filters
+                        # FIX v003: Cooldown 15min -> 60s for volatile market (truth-finding)
+                        # 900s caused missing crash -25% moves, 60s allows intraday but prevents overtrading
                         last_trade = self.state.last_trade_at.get(a, 0)
-                        cooldown_seconds = 900  # 15 min cooldown
+                        cooldown_seconds = 60  # 60s cooldown for volatile market
                         if not plan.reduce_only and time.time() - last_trade < cooldown_seconds:
                             remaining = int(cooldown_seconds - (time.time() - last_trade))
                             block("cooldown", f"Cooldown {remaining}s remaining to prevent overtrading")
@@ -1018,7 +1018,14 @@ class TradingEngine:
                           error_code=getattr(exc, "code", None), reason=reason_msg)
             if not ambiguous:
                 self.state.pending_order = None
-                self._backoffs[action["instrument"]] = {"retry_after": time.time()+600, "error": str(exc)}
+                # FIX v003: Backoff only for serious errors, not for below_minimum/skip_small
+                # Truth-finding: order_error_backoff blocked entire engine for 10min for 5$ notional error
+                err_str = str(exc).lower()
+                if "below" in err_str or "minimum" in err_str or "notional" in err_str or "small" in err_str:
+                    # Small notional errors should NOT trigger backoff, just skip
+                    log.info(f"Skipping backoff for small notional error: {exc}")
+                else:
+                    self._backoffs[action["instrument"]] = {"retry_after": time.time()+120, "error": str(exc)}  # 120s not 600s
             self.state.push("error", f"order {action['asset']}: {exc}")
             return 0.0
         finally:

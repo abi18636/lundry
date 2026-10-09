@@ -194,8 +194,10 @@ def sleeve_zenith_apex(frames: Dict[str, pd.DataFrame], capital: float, lev_cap:
     compress_frames = {a: frames[a] for a in assets if len(frames[a]) >= 336}
     impulse_frames = {a: frames[a] for a in assets if len(frames[a]) >= 168}
     # FIX: Remove ADX filter to ensure all assets trade, allow short, more profitable
-    cfg_c = dict(kind="compress", tag="compress_A", pct_lo=0.25, break_n=96,
-                 exit_n=48, confirm=1, adx_min=0.0, atr_n=24, pct_n=336,
+    # FIX v003 truth-finding: pct_lo 0.25->0.05 and break_n 96->24 for ranging market
+    # 0.25 caused 0 active signals in ranging market
+    cfg_c = dict(kind="compress", tag="compress_A", pct_lo=0.05, break_n=24,
+                 exit_n=24, confirm=1, adx_min=0.0, atr_n=14, pct_n=168,
                  lag=0, assets=list(compress_frames))
     cfg_i = dict(kind="impulse", tag="impulse_B", impulse_atr=2.8, ema_n=48,
                  hold_atr_trail=2.2, max_hold=72, confirm=1, adx_min=0.0,
@@ -239,12 +241,14 @@ def sleeve_almasi_primary(frames: Dict[str, pd.DataFrame], capital: float, lev_c
     if not assets:
         return res
     # TQ on all assets - FIX: adx 0, er 0 to ensure all assets trade and more profitable
+    # FIX v003 truth-finding: entry 504h (21 days) -> 72h (3 days) for volatile market
+    # 504h was overfit to 2021-2024, too slow for 2026 crash -25% in 1 day
     tq = {}
     for a in assets:
         tq[a] = (sig_turtle_quality(
-            frames[a], entry_n=504, exit_n=72, adx_min=0.0, er_min=0.0,
+            frames[a], entry_n=72, exit_n=24, adx_min=0.0, er_min=0.0,
             pullback=False, confirm_bars=1, long_only=False,
-        ) if len(frames[a]) >= 506 else pd.Series(0.0, index=frames[a].index))
+        ) if len(frames[a]) >= 74 else pd.Series(0.0, index=frames[a].index))
     # VQ on BTC/ETH only - FIX: adx 0, more active
     vq_assets = [a for a in ("BTC", "ETH") if a in frames]
     vq = {}

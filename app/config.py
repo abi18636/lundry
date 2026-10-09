@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     max_spread_bps: float = Field(default=200.0, gt=0)
     max_slippage_bps: float = Field(default=100.0, ge=0, le=500)
     max_drawdown_pct: float = Field(default=0.15, gt=0, le=0.50)  # v002: Back to 15% original conservative per your requirement, profitable
+    # v003 truth-finding: Add SL/TP and regime detection
+    atr_stop_mult: float = Field(default=2.0, gt=0, description="ATR stop loss multiplier")
+    atr_tp_mult: float = Field(default=4.0, gt=0, description="ATR take profit multiplier")
+    regime_adx_threshold: float = Field(default=20.0, gt=0, description="ADX threshold for trend vs range")
+    regime_atr_threshold: float = Field(default=5.0, gt=0, description="ATR% threshold for crash detection")
     ops_review_seconds: int = Field(default=3600, ge=60)
     allow_mainnet_trading: bool = False
     candle_lookback_hours: int = 2500
