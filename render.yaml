@@ -30,7 +30,7 @@ services:
       - key: ASSETS
         value: BTC,ETH,SOL,AVAX,LINK
       - key: SLEEVE_WEIGHTS
-        value: "diversified_5:0.50,zenith_apex:0.15,almasi_primary:0.15,inst_v3_stable:0.10,inst_v3_primary:0.05,zenith_endurance:0.05"
+        value: "diversified_5:0.30,zenith_apex:0.20,almasi_primary:0.20,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.05"
       - key: SLEEVES_ENABLED
         value: "diversified_5,zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance"
       - key: LOOP_SECONDS

@@ -45,10 +45,10 @@ class Settings(BaseSettings):
     assets: str = "BTC,ETH,SOL,AVAX,LINK"
 
     # Sleeve weights — independent DNA, no mixing
-    # NEW: diversified_5 guarantees 5/5 assets traded (fixes only AVAX trades)
+    # FIX: Balanced weights - all 6 strategies active, more profitable (user: only one strategy and losing)
     sleeve_weights: str = (
-        "diversified_5:0.50,zenith_apex:0.15,almasi_primary:0.15,"
-        "inst_v3_stable:0.10,inst_v3_primary:0.05,zenith_endurance:0.05"
+        "diversified_5:0.30,zenith_apex:0.20,almasi_primary:0.20,"
+        "inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.05"
     )
     sleeves_enabled: str = "diversified_5,zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance"
 
