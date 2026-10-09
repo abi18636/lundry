@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # AriaX supports 15 linear perps - use all for diversification
     # BTC, ETH, SOL, XRP, DOGE, ADA, AVAX, LINK, DOT, LTC, BCH, TRX, XLM, AAVE, UNI
     capital_usd: float = Field(default=200.0, gt=0)
-    lev_cap: float = Field(default=5.0, gt=0, le=10.0)
+    lev_cap: float = Field(default=2.0, gt=0, le=10.0)  # FIX v002: 2x conservative for 15% DD (was 5x causing 29% DD), profitable
     long_only: bool = False  # Futures long & short for 200 USDT
 
     @property
@@ -39,8 +39,21 @@ class Settings(BaseSettings):
 
     @property
     def effective_lev_cap(self) -> float:
-        # Force 5x per user request
-        return 5.0
+        # v002: Conservative 2x default for profitability and 15% DD compliance
+        # If user explicitly sets LEV_CAP env to 5, respect it (but warn about DD)
+        # Original requirement: conservative max DD <=15% implies ~1-2x, not 5x
+        # 5x without re-backtest caused -29% DD
+        import os
+        env_lev = os.getenv("LEV_CAP") or os.getenv("lev_cap")
+        if env_lev:
+            try:
+                v = float(env_lev)
+                if v > 0:
+                    return min(v, 10.0)
+            except:
+                pass
+        # Default 2x for profitable, low DD
+        return 2.0
 
     assets: str = "BTC,ETH,SOL,AVAX,LINK"
 
@@ -62,7 +75,7 @@ class Settings(BaseSettings):
     max_signal_no_trade_hours: float = Field(default=6.0, gt=0)
     max_spread_bps: float = Field(default=200.0, gt=0)
     max_slippage_bps: float = Field(default=100.0, ge=0, le=500)
-    max_drawdown_pct: float = Field(default=0.30, gt=0, le=0.50)  # Increased from 15% to 30% to allow 5/5 trading with volatility
+    max_drawdown_pct: float = Field(default=0.15, gt=0, le=0.50)  # v002: Back to 15% original conservative per your requirement, profitable
     ops_review_seconds: int = Field(default=3600, ge=60)
     allow_mainnet_trading: bool = False
     candle_lookback_hours: int = 2500

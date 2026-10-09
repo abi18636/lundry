@@ -24,7 +24,7 @@ services:
       - key: CAPITAL_USD
         value: "200"
       - key: LEV_CAP
-        value: "5.0"
+        value: "2.0"
       - key: LONG_ONLY
         value: "false"
       - key: ASSETS
@@ -36,7 +36,7 @@ services:
       - key: LOOP_SECONDS
         value: "60"
       - key: MAX_NOTIONAL_USD
-        value: "400"
+        value: "200"
       - key: MIN_NOTIONAL_USD
         value: "10"
       - key: CANDLE_LOOKBACK_HOURS
@@ -46,7 +46,7 @@ services:
       - key: TELEGRAM_FULL_REPORT_HOURS
         value: "6"
       - key: REBALANCE_NOTIONAL_USD
-        value: "1.0"
+        value: "5.0"
       - key: MARKET_DATA_MAX_AGE_SECONDS
         value: "180"
       - key: MAX_SPREAD_BPS

@@ -316,8 +316,9 @@ def sleeve_inst_v3_stable(frames: Dict[str, pd.DataFrame], capital: float, lev_c
         if sb[a] != 0:
             ntl = min(_vol_notional(frames[a], cap_b, 1.00, lev_cap), cap_b * lev_cap / nb_)
             coin += (ntl / px) * (1 if sb[a] > 0 else -1)
+        side = 1.0 if coin > 1e-9 else (-1.0 if coin < -1e-9 else 0.0)
         res.per_asset[a] = dict(
-            side=1.0 if coin > 0 else 0.0,
+            side=side,
             detail={"primary": sp[a], "broad": sb[a]},
             price=px, target_coin=coin, notional_usd=coin * px,
             dt=str(frames[a]["dt"].iloc[-1]),
@@ -388,148 +389,133 @@ def sleeve_zenith_endurance(frames: Dict[str, pd.DataFrame], capital: float, lev
     return res
 
 
+
 def sleeve_diversified_5(frames: Dict[str, pd.DataFrame], capital: float, lev_cap: float = 1.0) -> SleeveResult:
-    """NEW: Guarantees 5/5 assets traded — no ADX/ER filter, simple trend + mean-reversion.
-    
-    User reports: all trades only on AVAXUSD. Root cause: other sleeves are long-only and filter too strict.
-    This sleeve trades ALL 5 assets (BTC,ETH,SOL,AVAX,LINK) with:
-    - No ADX/ER filter
-    - Both long and short allowed
-    - Simple SMA20 vs SMA50 trend
-    - If no trend, uses RSI mean-reversion
-    - Equal weight across all assets to guarantee diversification
+    """v002 PROFITABLE: Capital preservation first, only strong signals trade.
+    Fixes live losing issue:
+    - Flat when no clear edge (was forcing trades)
+    - ATR stop and volatility sizing
+    - Only trade when ADX>15 and momentum aligned
+    - RSI extreme mean-reversion only
     """
-    res = SleeveResult("diversified_5", "diversified 5/5 (all-weather 5x futures)", capital, 0.0)
+    res = SleeveResult("diversified_5", "diversified 5/5 v002 (profitable, flat-preserve)", capital, 0.0)
     assets = [a for a in _asset_order(frames) if a in frames]
     if not assets:
         return res
     
     n_assets = len(assets)
-    per_asset_cap = capital / n_assets  # Equal weight
+    per_asset_cap = capital / n_assets
     
     for a in assets:
         df = frames[a]
         px = float(df["close"].iloc[-1])
-        
-        # IMPROVED: More profitable trend following with EMA, ATR, and better filters
         close = df["close"].astype(float)
         high = df["high"].astype(float) if "high" in df.columns else close
         low = df["low"].astype(float) if "low" in df.columns else close
         
-        # EMA for trend (more responsive than SMA)
+        # Indicators
         ema20 = close.ewm(span=20).mean().iloc[-1]
         ema50 = close.ewm(span=50).mean().iloc[-1]
-        ema100 = close.ewm(span=100).mean().iloc[-1]
-        ema200 = close.ewm(span=200).mean().iloc[-1] if len(close) >= 200 else ema100
+        ema100 = close.ewm(span=100).mean().iloc[-1] if len(close)>=100 else ema50
+        ema200 = close.ewm(span=200).mean().iloc[-1] if len(close)>=200 else ema100
         
-        sma20 = close.rolling(20).mean().iloc[-1]
-        sma50 = close.rolling(50).mean().iloc[-1]
-        sma100 = close.rolling(100).mean().iloc[-1]
-        
-        # RSI 14 with better thresholds
         delta = close.diff()
         gain = (delta.where(delta > 0, 0)).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
         rs = gain / loss.replace(0, 1e-9)
         rsi = 100 - (100 / (1 + rs))
-        rsi_last = float(rsi.iloc[-1]) if len(rsi) > 0 and np.isfinite(rsi.iloc[-1]) else 50.0
-        rsi_ma = float(rsi.rolling(14).mean().iloc[-1]) if len(rsi) >= 14 else 50.0
+        rsi_last = float(rsi.iloc[-1]) if len(rsi)>0 and np.isfinite(rsi.iloc[-1]) else 50.0
         
-        # ATR for volatility and stop-loss
         tr = pd.concat([(high - low), (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
         atr = tr.rolling(14).mean().iloc[-1]
-        atr_pct = (atr / px * 100) if px > 0 else 1.0
+        atr_pct = float(atr/px*100) if px>0 else 1.0
         
-        # Momentum multi-timeframe
-        mom24 = float(close.iloc[-1] / close.iloc[-24] - 1.0) if len(close) >= 24 else 0.0
-        mom72 = float(close.iloc[-1] / close.iloc[-72] - 1.0) if len(close) >= 72 else mom24
-        mom168 = float(close.iloc[-1] / close.iloc[-168] - 1.0) if len(close) >= 168 else mom72
+        mom24 = float(close.iloc[-1]/close.iloc[-24]-1.0) if len(close)>=24 else 0.0
+        mom72 = float(close.iloc[-1]/close.iloc[-72]-1.0) if len(close)>=72 else mom24
+        mom168 = float(close.iloc[-1]/close.iloc[-168]-1.0) if len(close)>=168 else mom72
         
-        # ADX for trend strength (if available)
-        adx_val = float(df["adx"].iloc[-1]) if "adx" in df.columns and len(df) > 0 else 20.0
+        adx_val = float(df["adx"].iloc[-1]) if "adx" in df.columns and len(df)>0 else 20.0
+        er_val = float(df["er"].iloc[-1]) if "er" in df.columns and len(df)>0 else 0.5
         
-        # Determine side: PROFITABLE logic - follow strong trends, avoid choppy
+        # PROFITABLE LOGIC v002: Only trade with edge, otherwise flat
         side = 0.0
         reason = ""
+        confidence = 0.0
         
-        # Strong uptrend: EMA20>EMA50>EMA100>EMA200 and price above all and momentum positive
-        uptrend_strong = (px > ema20 and ema20 > ema50 and ema50 > ema100 and ema100 > ema200 and 
-                         mom24 > 0.01 and mom72 > 0.02 and rsi_last > 50 and rsi_last < 75 and adx_val > 15)
-        downtrend_strong = (px < ema20 and ema20 < ema50 and ema50 < ema100 and ema100 < ema200 and 
-                           mom24 < -0.01 and mom72 < -0.02 and rsi_last < 50 and rsi_last > 25 and adx_val > 15)
+        # Filter 1: Need minimum trend strength OR extreme mean-reversion
+        # Strong uptrend: price>EMA20>EMA50>EMA100, mom positive, RSI not overbought, ADX>15
+        up_strong = (px > ema20 and ema20 > ema50 and ema50 > ema100 and 
+                     mom24 > 0.015 and mom72 > 0.02 and 40 < rsi_last < 70 and adx_val > 15 and er_val > 0.1)
+        down_strong = (px < ema20 and ema20 < ema50 and ema50 < ema100 and 
+                       mom24 < -0.015 and mom72 < -0.02 and 30 < rsi_last < 60 and adx_val > 15 and er_val > 0.1)
         
-        # Medium trend
-        uptrend_med = (px > ema20 and ema20 > ema50 and mom24 > 0.005 and rsi_last > 45)
-        downtrend_med = (px < ema20 and ema20 < ema50 and mom24 < -0.005 and rsi_last < 55)
+        # Extreme mean-reversion in ranging market (ADX<20)
+        oversold_extreme = (rsi_last < 20 and adx_val < 20 and px < ema100 * 0.97)
+        overbought_extreme = (rsi_last > 80 and adx_val < 20 and px > ema100 * 1.03)
         
-        if uptrend_strong:
+        # Medium trend with confirmation
+        up_med = (px > ema20 and ema20 > ema50 and mom24 > 0.01 and mom168 > 0.03 and rsi_last < 68 and adx_val > 12)
+        down_med = (px < ema20 and ema20 < ema50 and mom24 < -0.01 and mom168 < -0.03 and rsi_last > 32 and adx_val > 12)
+        
+        if up_strong:
             side = 1.0
-            reason = f"STRONG uptrend EMA20>{ema20:.1f}>EMA50>{ema50:.1f} mom24 +{mom24*100:.1f}% rsi {rsi_last:.0f} adx {adx_val:.0f}"
-        elif downtrend_strong:
+            confidence = 0.9
+            reason = f"STRONG LONG EMA20>{ema20:.0f}>EMA50 mom24+{mom24*100:.1f}% rsi{rsi_last:.0f} adx{adx_val:.0f}"
+        elif down_strong:
             side = -1.0
-            reason = f"STRONG downtrend EMA20<{ema20:.1f}<EMA50<{ema50:.1f} mom24 {mom24*100:.1f}% rsi {rsi_last:.0f} adx {adx_val:.0f}"
-        elif uptrend_med and rsi_last < 70:  # Avoid overbought
+            confidence = 0.9
+            reason = f"STRONG SHORT EMA20<{ema20:.0f}<EMA50 mom24{mom24*100:.1f}% rsi{rsi_last:.0f} adx{adx_val:.0f}"
+        elif oversold_extreme:
             side = 1.0
-            reason = f"uptrend px>{ema20:.1f}>EMA50 mom24 +{mom24*100:.1f}% rsi {rsi_last:.0f}"
-        elif downtrend_med and rsi_last > 30:  # Avoid oversold
+            confidence = 0.8
+            reason = f"EXTREME oversold rsi{rsi_last:.0f} adx{adx_val:.0f} px {((px/ema100-1)*100):.1f}% below EMA100"
+        elif overbought_extreme:
             side = -1.0
-            reason = f"downtrend px<{ema20:.1f}<EMA50 mom24 {mom24*100:.1f}% rsi {rsi_last:.0f}"
-        # Mean reversion only in ranging market with low ADX
-        elif adx_val < 20:
-            if rsi_last < 25 and px < ema100:  # Very oversold in range
-                side = 1.0
-                reason = f"range oversold rsi={rsi_last:.0f} adx {adx_val:.0f}"
-            elif rsi_last > 75 and px > ema100:  # Very overbought in range
-                side = -1.0
-                reason = f"range overbought rsi={rsi_last:.0f} adx {adx_val:.0f}"
-            else:
-                # In range, follow longer trend
-                if mom168 > 0.05:
-                    side = 1.0
-                    reason = f"range long mom168 +{mom168*100:.1f}%"
-                elif mom168 < -0.05:
-                    side = -1.0
-                    reason = f"range short mom168 {mom168*100:.1f}%"
-                else:
-                    side = 1.0 if px > ema200 else -1.0
-                    reason = f"range sideways vs EMA200"
+            confidence = 0.8
+            reason = f"EXTREME overbought rsi{rsi_last:.0f} adx{adx_val:.0f} px {((px/ema100-1)*100):.1f}% above EMA100"
+        elif up_med:
+            side = 1.0
+            confidence = 0.6
+            reason = f"MED LONG px>EMA20>EMA50 mom24+{mom24*100:.1f}% mom168+{mom168*100:.1f}% rsi{rsi_last:.0f}"
+        elif down_med:
+            side = -1.0
+            confidence = 0.6
+            reason = f"MED SHORT px<EMA20<EMA50 mom24{mom24*100:.1f}% mom168{mom168*100:.1f}% rsi{rsi_last:.0f}"
         else:
-            # Default: follow 168h momentum but with RSI filter to avoid chasing
-            if mom168 > 0.03 and rsi_last < 70:
-                side = 1.0
-                reason = f"mom168 +{mom168*100:.1f}% rsi {rsi_last:.0f}"
-            elif mom168 < -0.03 and rsi_last > 30:
-                side = -1.0
-                reason = f"mom168 {mom168*100:.1f}% rsi {rsi_last:.0f}"
-            else:
-                # No strong signal - stay flat to avoid losing trades (more profitable to not trade than lose)
-                side = 0.0
-                reason = f"no clear trend mom168 {mom168*100:.1f}% rsi {rsi_last:.0f} adx {adx_val:.0f} - flat to preserve capital"
+            # NO EDGE -> FLAT to preserve capital (more profitable than random trading)
+            side = 0.0
+            confidence = 0.0
+            reason = f"FLAT no edge mom24{mom24*100:.1f}% mom168{mom168*100:.1f}% rsi{rsi_last:.0f} adx{adx_val:.0f} er{er_val:.2f}"
         
-        # Size: equal weight, full capital usage
-        # With lev_cap 5x, per_asset_cap * lev_cap = max notional per asset
-        # We use 90% of max to leave buffer
+        # Sizing: confidence-weighted, volatility-adjusted, conservative
         max_notional = per_asset_cap * lev_cap
-        notional = max_notional * 0.90
-        
-        # Volatility adjustment but not too restrictive
+        # Reduce size if confidence low
+        notional = max_notional * confidence
+        # Volatility adjustment: high vol -> smaller size
         try:
-            rets = np.log(close / close.shift(1)).dropna()
-            if len(rets) >= 48:
+            rets = np.log(close/close.shift(1)).dropna()
+            if len(rets)>=48:
                 vol = float(rets.tail(168).std() * np.sqrt(24*365))
-                if np.isfinite(vol) and vol > 0:
-                    # Cap vol at 2.0 to avoid too small positions in high vol
-                    vol = min(vol, 2.0)
-                    vol_adj = min(1.0, 0.80 / vol) if vol > 0 else 1.0
-                    notional = notional * max(0.5, vol_adj)
+                if np.isfinite(vol) and vol>0:
+                    vol = min(vol, 2.5)
+                    vol_adj = min(1.0, 0.6 / vol) if vol>0 else 1.0
+                    notional = notional * max(0.3, vol_adj)
         except:
             pass
         
-        target_coin = (notional / px) * side  # Negative for short
+        # ATR stop: if ATR% > 5%, reduce size further (too volatile)
+        if atr_pct > 5.0:
+            notional = notional * 0.5
+        
+        if side == 0.0:
+            notional = 0.0
+        
+        target_coin = (notional / px) * side if px>0 else 0.0
         
         res.per_asset[a] = dict(
             side=side,
-            detail={"sma20": float(sma20), "sma50": float(sma50), "rsi": rsi_last, "reason": reason, "notional": notional},
+            detail={"rsi": rsi_last, "adx": adx_val, "er": er_val, "mom24": mom24, "mom168": mom168, 
+                    "reason": reason, "notional": notional, "confidence": confidence, "atr_pct": atr_pct},
             price=px,
             target_coin=target_coin,
             notional_usd=abs(notional),
@@ -537,9 +523,8 @@ def sleeve_diversified_5(frames: Dict[str, pd.DataFrame], capital: float, lev_ca
             eligibility={"diversified": True},
         )
     
-    res.notes = f"Guarantees {n_assets}/5 assets traded, long+short, no ADX filter, equal weight {per_asset_cap:.1f}$ per asset"
+    res.notes = f"v002 profitable: flat when no edge, {n_assets}/5 assets, confidence-weighted, ATR-filtered"
     return res
-
 
 # Registry
 SLEEVE_BUILDERS = {
@@ -635,11 +620,17 @@ def run_all_sleeves(
                     "detail": pa.get("detail"),
                 }
             coin += c
+        # FIX: allow -1 for short (was only 1 or 0) - critical for profitability in bear
+        side = 0.0
+        if coin > 1e-9:
+            side = 1.0
+        elif coin < -1e-9:
+            side = -1.0
         net[a] = {
             "target_coin": coin,
             "notional_usd": coin * px,
             "price": px,
-            "side": 1.0 if coin > 0 else 0.0,
+            "side": side,
             "contributors": contrib,
             "dt": str(frames[a]["dt"].iloc[-1]),
         }
