@@ -1021,11 +1021,12 @@ class TradingEngine:
                 # FIX v003: Backoff only for serious errors, not for below_minimum/skip_small
                 # Truth-finding: order_error_backoff blocked entire engine for 10min for 5$ notional error
                 err_str = str(exc).lower()
-                if "below" in err_str or "minimum" in err_str or "notional" in err_str or "small" in err_str:
-                    # Small notional errors should NOT trigger backoff, just skip
-                    log.info(f"Skipping backoff for small notional error: {exc}")
+                # FIX v004: qty exceeds should NOT trigger backoff, it's a close precision issue
+                if "below" in err_str or "minimum" in err_str or "notional" in err_str or "small" in err_str or "qty exceeds" in err_str or "exceeds position" in err_str:
+                    # Small notional or qty exceeds errors should NOT trigger backoff, just skip
+                    log.info(f"Skipping backoff for small/qty error: {exc}")
                 else:
-                    self._backoffs[action["instrument"]] = {"retry_after": time.time()+120, "error": str(exc)}  # 120s not 600s
+                    self._backoffs[action["instrument"]] = {"retry_after": time.time()+60, "error": str(exc)}  # 60s not 600s, per-asset
             self.state.push("error", f"order {action['asset']}: {exc}")
             return 0.0
         finally:

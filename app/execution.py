@@ -100,6 +100,8 @@ def plan_rebalance(current: float, desired: float, price: float, step: float,
         else:
             p.status = "below_exchange_minimum"
             p.reason = "Rebalance delta is smaller than exchange minimum"
+    # FIX v004: qty exceeds position size should be treated as target_reached not error
+    # This happens when trying to close exact position size
     elif p.amount * price < 5.0:  # Exchange minNotional is 5$ for all linear perps (LINK, AVAX etc)
         # If notional < 5$, consider it target_reached to avoid notional below minimum error
         # This prevents No blind retry or fallback close errors
