@@ -784,26 +784,37 @@ class TradingEngine:
             # Root cause: Bybit-style exchange with floating precision issues
             # Solution: For AriaX, NEVER reduce via limit_ioc, use close_position with 90% size
             # Or keep position and let next cycle handle with smaller size
+            # FIX v006 truth-finding: AriaX qty exceeds affects BOTH close and reversal - CRITICAL
+            # For ANY position, close or reversal fails with exact size
+            # Solution: Close 90% first, leave 10%, next cycle close remaining or open new
             if "ariax" in s.ariax_base_url.lower() or "dryclean" in s.ariax_base_url.lower():
-                # For ANY position (long or short), avoid reductions that trigger qty exceeds
-                if current != 0 and abs(desired) < abs(current):
-                    # Reduction (close or partial) - this triggers bug on AriaX
-                    # Strategy: If full close (desired=0), keep 10% to avoid exact size bug
-                    # If partial reduction, keep current (no reduction)
-                    if desired == 0:
-                        # Full close requested - but exact close fails
-                        # Keep 10% of position to avoid qty exceeds, close 90% next cycle
-                        # Actually for v005: allow close but with 90% size via close_position logic
-                        # Here we set desired to 10% of current, so plan will close 90%
-                        desired = current * 0.10  # Leave 10%, close 90%
-                        log.info(f"AriaX v005 workaround: closing 90% of {a} {current}->{desired} to avoid qty exceeds bug (was {b.get('target_coin')})")
-                    else:
-                        # Partial reduction - avoid, keep current
-                        # Only allow if reduction is >50% (significant trend change)
-                        reduction_pct = (abs(current) - abs(desired)) / abs(current) if abs(current)>0 else 0
-                        if reduction_pct < 0.5:
-                            desired = current
-                            log.info(f"AriaX v005 workaround: keeping {a} at {current} instead of reducing to {b.get('target_coin')} ({reduction_pct*100:.0f}% reduction) to avoid qty exceeds")
+                if current != 0:
+                    # Check if it's a reduction or reversal
+                    is_reduction = abs(desired) < abs(current)
+                    is_reversal = current * desired < 0
+                    is_close = desired == 0
+                    
+                    if is_close or is_reversal or is_reduction:
+                        # Any close/reduction/reversal triggers bug
+                        if is_close:
+                            # Full close: close 90%, leave 10%
+                            desired = current * 0.10
+                            log.info(f"AriaX v006 workaround: closing 90% of {a} {current}->{desired} (was close) to avoid qty exceeds")
+                        elif is_reversal:
+                            # Reversal: first close 90% of current, leave 10% opposite? Actually close 90% to 10% of current
+                            # Example: short -0.068 -> long 0.0012, we set desired = -0.068*0.10 = -0.0068 (close 90% of short)
+                            desired = current * 0.10
+                            log.info(f"AriaX v006 workaround: reversal {a} {current}->{b.get('target_coin')} -> closing 90% to {desired} to avoid qty exceeds")
+                        else:
+                            # Partial reduction
+                            reduction_pct = (abs(current) - abs(desired)) / abs(current) if abs(current)>0 else 0
+                            if reduction_pct < 0.8:  # Less than 80% reduction -> keep current
+                                desired = current
+                                log.info(f"AriaX v006 workaround: keeping {a} at {current} instead of reducing to {b.get('target_coin')} ({reduction_pct*100:.0f}%) to avoid qty exceeds")
+                            else:
+                                # Large reduction >80% -> close 90%
+                                desired = current * 0.10
+                                log.info(f"AriaX v006 workaround: large reduction {a} {current}->{b.get('target_coin')} -> closing 90% to {desired}")
             timestamp = book.get("timestamp")
             age = max(0, (now_ms-float(timestamp))/1000) if timestamp else None
             state = str(book.get("state") or "unknown").lower()
