@@ -644,7 +644,7 @@ class AriaXClient:
         # Root cause: AriaX Bybit floating precision, exact size close always fails
         if reduce_only:
             # Reduce amount by 10% to avoid qty exceeds error
-            amount = amount * 0.90
+            amount = amount * 0.50  # FIX v007: 90% still fails, need 50%
             # Also floor to step to avoid precision issues
             try:
                 from decimal import Decimal, ROUND_DOWN
