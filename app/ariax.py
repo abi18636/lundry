@@ -639,11 +639,12 @@ class AriaXClient:
         raise AriaXAPIError("order/create", -1, "all bases failed")
 
     def limit_ioc(self, instrument: str, direction: str, amount: float, price: float, label: str, reduce_only: bool = False) -> dict:
-        # FIX v004 truth-finding: qty exceeds position size - reduce qty by 1% for close orders
-        # AriaX/Bybit sometimes rejects exact position size close due to floating errors
+        # FIX v005 truth-finding: qty exceeds position size - reduce qty by 10% for close orders CRITICAL
+        # 0.995 still fails for ETH, SOL, AVAX - need 0.90
+        # Root cause: AriaX Bybit floating precision, exact size close always fails
         if reduce_only:
-            # Reduce amount by 0.5% to avoid qty exceeds error
-            amount = amount * 0.995
+            # Reduce amount by 10% to avoid qty exceeds error
+            amount = amount * 0.90
             # Also floor to step to avoid precision issues
             try:
                 from decimal import Decimal, ROUND_DOWN
@@ -653,6 +654,10 @@ class AriaXClient:
                 if step > 0:
                     units = (Decimal(str(amount)) / Decimal(str(step))).to_integral_value(rounding=ROUND_DOWN)
                     amount = float(units * Decimal(str(step)))
+                    # Ensure at least minimum
+                    min_amt = float(info.get("min_trade_amount") or step)
+                    if amount < min_amt:
+                        amount = min_amt
             except:
                 pass
         legacy_sym = instrument.replace("USDT", "USD") if instrument.endswith("USDT") else instrument

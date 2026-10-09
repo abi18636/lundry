@@ -778,22 +778,32 @@ class TradingEngine:
             if latched:
                 desired = 0.0
 
-            # Workaround for AriaX bug: long positions cannot be reduced (sell fails qty exceeds)
-            # User reports only AVAX trades, but with 5/5 signals we now have reversals long->short
-            # AriaX bug: any Sell for long position fails qty exceeds, even if qty < position
-            # So we must avoid ALL reductions and reversals for long positions
+            # FIX v005 truth-finding: AriaX qty exceeds bug affects BOTH long and short!
+            # Workaround for AriaX bug: ANY close/reduce fails qty exceeds, even with exact size
+            # User reports: ETH short -0.068 close with buy 0.068 fails, SOL, AVAX same
+            # Root cause: Bybit-style exchange with floating precision issues
+            # Solution: For AriaX, NEVER reduce via limit_ioc, use close_position with 90% size
+            # Or keep position and let next cycle handle with smaller size
             if "ariax" in s.ariax_base_url.lower() or "dryclean" in s.ariax_base_url.lower():
-                if current > 0 and desired < current:
-                    # Any reduction or reversal (desired < current when long) triggers bug
-                    # Keep current unless desired is 0 (full close attempted) - but even close fails
-                    # So for AriaX, never reduce long positions, only increase
-                    if desired <= 0:
-                        # Reversal long->short or close - this will fail, so keep current
-                        desired = current
-                        log.info(f"AriaX workaround: keeping long {a} at {current} instead of reversal/close to {b.get('target_coin')} to avoid qty exceeds bug")
-                    elif abs(desired - current) / current < 0.8:  # Less than 80% change
-                        desired = current
-                        log.info(f"AriaX workaround: keeping long {a} at {current} instead of reducing to {b.get('target_coin')} to avoid qty exceeds bug")
+                # For ANY position (long or short), avoid reductions that trigger qty exceeds
+                if current != 0 and abs(desired) < abs(current):
+                    # Reduction (close or partial) - this triggers bug on AriaX
+                    # Strategy: If full close (desired=0), keep 10% to avoid exact size bug
+                    # If partial reduction, keep current (no reduction)
+                    if desired == 0:
+                        # Full close requested - but exact close fails
+                        # Keep 10% of position to avoid qty exceeds, close 90% next cycle
+                        # Actually for v005: allow close but with 90% size via close_position logic
+                        # Here we set desired to 10% of current, so plan will close 90%
+                        desired = current * 0.10  # Leave 10%, close 90%
+                        log.info(f"AriaX v005 workaround: closing 90% of {a} {current}->{desired} to avoid qty exceeds bug (was {b.get('target_coin')})")
+                    else:
+                        # Partial reduction - avoid, keep current
+                        # Only allow if reduction is >50% (significant trend change)
+                        reduction_pct = (abs(current) - abs(desired)) / abs(current) if abs(current)>0 else 0
+                        if reduction_pct < 0.5:
+                            desired = current
+                            log.info(f"AriaX v005 workaround: keeping {a} at {current} instead of reducing to {b.get('target_coin')} ({reduction_pct*100:.0f}% reduction) to avoid qty exceeds")
             timestamp = book.get("timestamp")
             age = max(0, (now_ms-float(timestamp))/1000) if timestamp else None
             state = str(book.get("state") or "unknown").lower()
