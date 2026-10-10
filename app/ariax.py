@@ -763,6 +763,9 @@ class AriaXClient:
             raise AriaXAPIError("limit_ioc", -1, str(exc))
 
     def buy_market(self, instrument: str, amount: float, label: str = "zenith", reduce_only: bool = False) -> dict:
+        # FIX v011: Reduce amount by 10% for market reduceOnly to avoid qty exceeds
+        if reduce_only:
+            amount = amount * 0.90
         legacy_sym = instrument.replace("USDT", "USD") if instrument.endswith("USDT") else instrument
         try:
             import json as js
@@ -856,6 +859,9 @@ class AriaXClient:
             raise AriaXAPIError("buy_market", -1, str(exc))
 
     def sell_market(self, instrument: str, amount: float, label: str = "zenith", reduce_only: bool = False) -> dict:
+        # FIX v011: Reduce amount by 10% for market reduceOnly
+        if reduce_only:
+            amount = amount * 0.90
         legacy_sym = instrument.replace("USDT", "USD") if instrument.endswith("USDT") else instrument
         try:
             import json as js

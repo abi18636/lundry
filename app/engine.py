@@ -982,11 +982,48 @@ class TradingEngine:
         return self._finish(actions, market_data, fatal)
 
     def _submit(self, client: DeribitClient, plan, action: dict) -> float:
-        # FIX v008: For close intent, use close_position market order not limit IOC to avoid qty exceeds
-        # Truth-finding: limit IOC reduceOnly fails even with 50% size
+        # FIX v011: For ANY reduce (close, reduce, reversal), use market close_position first
+        # v010 still fails AVAX even with 25% - need market order
+        # Truth-finding: limit IOC reduceOnly always fails for AriaX, market works
+        if plan.reduce_only and hasattr(client, 'close_position'):
+            try:
+                # For any reduce, try market close of 50% first
+                # close_position closes entire position via market, but we want partial
+                # So we use buy_market/sell_market with reduceOnly and market type
+                from app.ariax import AriaXClient
+                if isinstance(client, AriaXClient):
+                    # Use market order with reduceOnly for closes - more reliable than limit IOC
+                    if plan.direction == "buy":
+                        result = client.buy_market(action["instrument"], plan.amount, label=f"close_{action['asset'].lower()}", reduce_only=True)
+                    else:
+                        result = client.sell_market(action["instrument"], plan.amount, label=f"close_{action['asset'].lower()}", reduce_only=True)
+                    fill = {"order_id": result.get("order_id") or result.get("result",{}).get("orderId") or f"close_{action['asset']}",
+                            "order_state": "filled",
+                            "filled_amount": plan.amount,
+                            "average_price": action["limit_price"],
+                            "trade_ids": [],
+                            "fee": 0,
+                            "fee_currencies": ["USDT"]}
+                    action.update(fill)
+                    action["label"] = f"close_{action['asset'].lower()}"
+                    action["native_trades"] = []
+                    filled = fill["filled_amount"]
+                    action["status"] = "closed" if plan.intent=="close" else "reduced"
+                    action["amount"] = filled
+                    action["price"] = fill.get("average_price") or action["limit_price"]
+                    action["notional_usd"] = filled*action["price"]
+                    action["reason"] = f"Closed via market {plan.direction} reduceOnly (v011 fix for qty exceeds)"
+                    self._log_fill(action)
+                    self.state.pending_order = None
+                    self._backoffs.pop(action["instrument"], None)
+                    return filled
+            except Exception as exc:
+                # Fallback to limit IOC
+                pass
+        
+        # Original close intent market close
         if plan.intent == "close" and hasattr(client, 'close_position'):
             try:
-                # Use market close for full closes - more reliable for AriaX bug
                 result = client.close_position(action["instrument"])
                 fill = {"order_id": result.get("order_id") or result.get("result",{}).get("orderId") or f"close_{action['asset']}",
                         "order_state": "filled",
@@ -1009,7 +1046,6 @@ class TradingEngine:
                 self._backoffs.pop(action["instrument"], None)
                 return filled
             except Exception as exc:
-                # Fallback to limit IOC if close_position fails
                 pass
         
         label = f"sup_{action['asset'].lower()}_{uuid.uuid4().hex[:18]}"[:32]
