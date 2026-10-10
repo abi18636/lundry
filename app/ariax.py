@@ -639,11 +639,11 @@ class AriaXClient:
         raise AriaXAPIError("order/create", -1, "all bases failed")
 
     def limit_ioc(self, instrument: str, direction: str, amount: float, price: float, label: str, reduce_only: bool = False) -> dict:
-        # FIX v009: qty exceeds - use market order for reduceOnly closes, limit IOC fails
-        # If reduceOnly, try market first via close_position logic
+        # FIX v010: AVAX still qty exceeds even with 50% - try 25% and market fallback
         if reduce_only:
-            # For reduceOnly, reduce amount by 50% and ensure minimum notional 5$
-            amount = amount * 0.50
+            # For reduceOnly, reduce amount by 75% (close 25% only) to avoid qty exceeds
+            # AVAX -0.98 close 0.49 fails, try 0.24 (25%)
+            amount = amount * 0.25
             try:
                 from decimal import Decimal, ROUND_DOWN
                 info = self.instrument(instrument)
