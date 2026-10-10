@@ -982,21 +982,17 @@ class TradingEngine:
         return self._finish(actions, market_data, fatal)
 
     def _submit(self, client: DeribitClient, plan, action: dict) -> float:
-        # FIX v011: For ANY reduce (close, reduce, reversal), use market close_position first
-        # v010 still fails AVAX even with 25% - need market order
-        # Truth-finding: limit IOC reduceOnly always fails for AriaX, market works
+        # FIX v011b: For ANY reduce, try market WITHOUT reduceOnly - AriaX reduceOnly has bug
         if plan.reduce_only and hasattr(client, 'close_position'):
             try:
-                # For any reduce, try market close of 50% first
-                # close_position closes entire position via market, but we want partial
-                # So we use buy_market/sell_market with reduceOnly and market type
                 from app.ariax import AriaXClient
                 if isinstance(client, AriaXClient):
-                    # Use market order with reduceOnly for closes - more reliable than limit IOC
+                    # Try WITHOUT reduceOnly flag - AriaX reduceOnly is buggy
+                    # Use market order without reduceOnly for closes
                     if plan.direction == "buy":
-                        result = client.buy_market(action["instrument"], plan.amount, label=f"close_{action['asset'].lower()}", reduce_only=True)
+                        result = client.buy_market(action["instrument"], plan.amount, label=f"close_{action['asset'].lower()}", reduce_only=False)
                     else:
-                        result = client.sell_market(action["instrument"], plan.amount, label=f"close_{action['asset'].lower()}", reduce_only=True)
+                        result = client.sell_market(action["instrument"], plan.amount, label=f"close_{action['asset'].lower()}", reduce_only=False)
                     fill = {"order_id": result.get("order_id") or result.get("result",{}).get("orderId") or f"close_{action['asset']}",
                             "order_state": "filled",
                             "filled_amount": plan.amount,
