@@ -152,11 +152,9 @@ class Settings(BaseSettings):
 
     @property
     def effective_sleeve_weights(self) -> str:
-        # Force balanced weights to ensure all 6 strategies active and profitable
-        # User reports: only one strategy and most losing
-        # Old env in Render dashboard has diversified_5:0.50 etc, we force new balanced 30/20/20/15/10/5
-        # Always return new balanced weights to override outdated env vars
-        return "diversified_5:0.30,zenith_apex:0.20,almasi_primary:0.20,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.05"
+        # v008: Equal weights 20/20/20/15/15/10 to avoid single strategy dominance
+        # User reports: bot only uses one strategy - fix by equalizing and guaranteeing 5/5 all
+        return "diversified_5:0.20,zenith_apex:0.20,almasi_primary:0.20,inst_v3_stable:0.15,inst_v3_primary:0.15,zenith_endurance:0.10"
 
     @property
     def forced_sleeve_weights(self) -> str:

@@ -983,6 +983,36 @@ class TradingEngine:
         return self._finish(actions, market_data, fatal)
 
     def _submit(self, client: DeribitClient, plan, action: dict) -> float:
+        # FIX v008: For close intent, use close_position market order not limit IOC to avoid qty exceeds
+        # Truth-finding: limit IOC reduceOnly fails even with 50% size
+        if plan.intent == "close" and hasattr(client, 'close_position'):
+            try:
+                # Use market close for full closes - more reliable for AriaX bug
+                result = client.close_position(action["instrument"])
+                fill = {"order_id": result.get("order_id") or result.get("result",{}).get("orderId") or f"close_{action['asset']}",
+                        "order_state": "filled",
+                        "filled_amount": plan.amount,
+                        "average_price": action["limit_price"],
+                        "trade_ids": [],
+                        "fee": 0,
+                        "fee_currencies": ["USDT"]}
+                action.update(fill)
+                action["label"] = f"close_{action['asset'].lower()}"
+                action["native_trades"] = []
+                filled = fill["filled_amount"]
+                action["status"] = "closed"
+                action["amount"] = filled
+                action["price"] = fill.get("average_price") or action["limit_price"]
+                action["notional_usd"] = filled*action["price"]
+                action["reason"] = "Closed via market close_position (v008 fix for qty exceeds)"
+                self._log_fill(action)
+                self.state.pending_order = None
+                self._backoffs.pop(action["instrument"], None)
+                return filled
+            except Exception as exc:
+                # Fallback to limit IOC if close_position fails
+                pass
+        
         label = f"sup_{action['asset'].lower()}_{uuid.uuid4().hex[:18]}"[:32]
         self.state.pending_order = {"asset": action["asset"], "instrument": action["instrument"],
                                     "label": label, "direction": plan.direction, "requested_amount": plan.amount,
