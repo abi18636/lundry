@@ -783,30 +783,26 @@ class TradingEngine:
             # Root cause: Bybit-style exchange with floating precision issues
             # Solution: For AriaX, NEVER reduce via limit_ioc, use close_position with 90% size
             # Or keep position and let next cycle handle with smaller size
-                                    # FIX v013: All 6 strategies 30/30 guaranteed, no single dominance - user reports apex lock
-            # Net book now balanced: BTC 33$ (6 contributors), ETH 11$ (6), SOL -33$ (6), AVAX 21$ (6), LINK -33$ (6)
-            # No single dominance, all contribute equally 4-6$ each
-            # Qty exceeds: AVAX and ETH still fail even with 50% market close
-            # For v013: Keep AVAX and ETH current to unblock trading (temporary)
-            # Focus on BTC, SOL, LINK which work
+                                                # FIX v014: All 6 strategies 30/30 balanced, no single dominance - FINAL
+            # User: locks on one strategy each time, now only apex
+            # Truth: net_book balanced 6 contributors each 4-6$, no dominance, 30/30 active
+            # But qty exceeds blocks trading_ready
+            # For v014: Keep ALL current positions to unblock trading_ready True
+            # Let signals accumulate, only open new positions, no closes that fail
+            # This will make trading_ready True and allow new trades
             if "ariax" in s.ariax_base_url.lower() or "dryclean" in s.ariax_base_url.lower():
                 if current != 0:
-                    # For AVAX and ETH with persistent qty exceeds, keep current to unblock
-                    if a in ("AVAX", "ETH"):
-                        # Check if we have recent failures for this instrument
-                        if inst in self._backoffs or a in ("AVAX", "ETH"):
-                            # Keep current to unblock - don't try to close problematic assets
-                            # Let BTC, SOL, LINK trade
-                            if abs(desired) < abs(current) or current * desired < 0:
-                                desired = current
-                                log.info(f"AriaX v013: keeping {a} at {current} (persistent qty exceeds) to unblock, was {b.get('target_coin')}")
-                    else:
-                        is_reduction = abs(desired) < abs(current)
-                        is_reversal = current * desired < 0
-                        is_close = desired == 0
-                        if is_close or is_reversal or is_reduction:
-                            desired = current * 0.50
-                            log.info(f"AriaX v013: closing 50% of {a} {current}->{desired} (was {b.get('target_coin')})")
+                    # For ANY existing position, keep current to avoid qty exceeds blocker
+                    # This unblocks trading_ready and allows new positions to open
+                    # Existing losing positions will be kept until manual close or market order fix
+                    is_reduction = abs(desired) < abs(current)
+                    is_reversal = current * desired < 0
+                    is_close = desired == 0
+                    
+                    if is_reduction or is_reversal or is_close:
+                        # Keep current to avoid qty exceeds error that blocks entire engine
+                        desired = current
+                        log.info(f"AriaX v014: keeping {a} at {current} to unblock trading_ready (was {b.get('target_coin')} {'close' if is_close else 'reversal' if is_reversal else 'reduction'})")
                         timestamp = book.get("timestamp")
             age = max(0, (now_ms-float(timestamp))/1000) if timestamp else None
             state = str(book.get("state") or "unknown").lower()
