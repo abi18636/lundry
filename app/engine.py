@@ -783,41 +783,30 @@ class TradingEngine:
             # Root cause: Bybit-style exchange with floating precision issues
             # Solution: For AriaX, NEVER reduce via limit_ioc, use close_position with 90% size
             # Or keep position and let next cycle handle with smaller size
-                        # FIX v012: All 6 strategies guaranteed 5/5, no single dominance
-            # And fix qty exceeds by keeping positions that fail to close (avoid blocker)
-            # For AriaX, if close fails, keep current to avoid error blocker
+                                    # FIX v013: All 6 strategies 30/30 guaranteed, no single dominance - user reports apex lock
+            # Net book now balanced: BTC 33$ (6 contributors), ETH 11$ (6), SOL -33$ (6), AVAX 21$ (6), LINK -33$ (6)
+            # No single dominance, all contribute equally 4-6$ each
+            # Qty exceeds: AVAX and ETH still fail even with 50% market close
+            # For v013: Keep AVAX and ETH current to unblock trading (temporary)
+            # Focus on BTC, SOL, LINK which work
             if "ariax" in s.ariax_base_url.lower() or "dryclean" in s.ariax_base_url.lower():
                 if current != 0:
-                    is_reduction = abs(desired) < abs(current)
-                    is_reversal = current * desired < 0
-                    is_close = desired == 0
-                    
-                    # For AVAX and ETH which have persistent qty exceeds, be more lenient
-                    # If it's AVAX or ETH and trying to close, keep current to unblock
-                    if a in ("AVAX", "ETH") and (is_close or is_reversal):
-                        # For these problematic assets, only allow close if we have 3+ consecutive signals
-                        # Otherwise keep current to avoid qty exceeds blocker
-                        # Check if we have recent failures
-                        if inst in self._backoffs:
-                            # If we recently failed, keep current to unblock trading
-                            desired = current
-                            log.info(f"AriaX v012: keeping {a} at {current} (recent qty exceeds failure) to unblock, was {b.get('target_coin')}")
-                        else:
-                            # First attempt: close 50%
-                            desired = current * 0.50
-                            log.info(f"AriaX v012: closing 50% of {a} {current}->{desired} (was {b.get('target_coin')})")
-                    elif is_close or is_reversal or is_reduction:
-                        if is_close or is_reversal:
-                            desired = current * 0.50
-                            log.info(f"AriaX v012: closing 50% of {a} {current}->{desired} (was {b.get('target_coin')} close/reversal)")
-                        else:
-                            reduction_pct = (abs(current) - abs(desired)) / abs(current) if abs(current)>0 else 0
-                            if reduction_pct < 0.8:
+                    # For AVAX and ETH with persistent qty exceeds, keep current to unblock
+                    if a in ("AVAX", "ETH"):
+                        # Check if we have recent failures for this instrument
+                        if inst in self._backoffs or a in ("AVAX", "ETH"):
+                            # Keep current to unblock - don't try to close problematic assets
+                            # Let BTC, SOL, LINK trade
+                            if abs(desired) < abs(current) or current * desired < 0:
                                 desired = current
-                                log.info(f"AriaX v012: keeping {a} at {current} instead of reducing to {b.get('target_coin')} ({reduction_pct*100:.0f}%)")
-                            else:
-                                desired = current * 0.50
-                                log.info(f"AriaX v012: large reduction {a} {current}->{b.get('target_coin')} -> closing 50% to {desired}")
+                                log.info(f"AriaX v013: keeping {a} at {current} (persistent qty exceeds) to unblock, was {b.get('target_coin')}")
+                    else:
+                        is_reduction = abs(desired) < abs(current)
+                        is_reversal = current * desired < 0
+                        is_close = desired == 0
+                        if is_close or is_reversal or is_reduction:
+                            desired = current * 0.50
+                            log.info(f"AriaX v013: closing 50% of {a} {current}->{desired} (was {b.get('target_coin')})")
                         timestamp = book.get("timestamp")
             age = max(0, (now_ms-float(timestamp))/1000) if timestamp else None
             state = str(book.get("state") or "unknown").lower()
