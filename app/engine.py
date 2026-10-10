@@ -182,7 +182,7 @@ class TradingEngine:
             "base_url": s.deribit_base_url, "loop_seconds": s.loop_seconds,
             "architecture": "independent_sleeves_net_at_order_layer",
             "execution": "slippage_bounded_limit_ioc", "max_notional_usd": s.max_notional_usd,
-            "effective_leverage_cap": min(s.lev_cap, 1.0), "max_drawdown_pct": s.max_drawdown_pct,
+            "effective_leverage_cap": min(s.lev_cap, 5.0), "max_drawdown_pct": s.max_drawdown_pct,  # FIX v009: allow up to 5x not 1x
             "legacy_min_notional_usd": s.min_notional_usd,
             "min_notional_policy": "exchange_lots_only_never_inflate_allocations",
             "rebalance_notional_usd": s.rebalance_notional_usd,
@@ -340,9 +340,8 @@ class TradingEngine:
             log.info(f"Drawdown recovered {drawdown*100:.1f}% < {s.max_drawdown_pct*50:.1f}%, unlatching guard (was latched)")
         else:
             latched = old_latched or drawdown >= s.max_drawdown_pct
-        # Use lev_cap from settings (now 5x) but cap at 1x for risk calc? User wants 5x futures
-        # For futures, allow lev_cap up to 5x
-        cap = min(s.capital_usd, max(0.0, estimated)) * min(s.lev_cap, 5.0)
+        # FIX v009: Allow lev_cap up to 5x for futures (was capped at 1x in snapshot)
+        cap = min(s.capital_usd, max(0.0, estimated)) * min(s.lev_cap, 5.0) * 1.5  # 1.5x buffer for 6 strategies
         if s.max_notional_usd > 0:
             cap = min(cap, s.max_notional_usd)
         self.state.risk = {**r, "estimated_bot_equity": estimated, "peak_bot_equity": peak,

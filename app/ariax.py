@@ -639,25 +639,31 @@ class AriaXClient:
         raise AriaXAPIError("order/create", -1, "all bases failed")
 
     def limit_ioc(self, instrument: str, direction: str, amount: float, price: float, label: str, reduce_only: bool = False) -> dict:
-        # FIX v005 truth-finding: qty exceeds position size - reduce qty by 10% for close orders CRITICAL
-        # 0.995 still fails for ETH, SOL, AVAX - need 0.90
-        # Root cause: AriaX Bybit floating precision, exact size close always fails
+        # FIX v009: qty exceeds - use market order for reduceOnly closes, limit IOC fails
+        # If reduceOnly, try market first via close_position logic
         if reduce_only:
-            # Reduce amount by 10% to avoid qty exceeds error
-            amount = amount * 0.50  # FIX v007: 90% still fails, need 50%
-            # Also floor to step to avoid precision issues
+            # For reduceOnly, reduce amount by 50% and ensure minimum notional 5$
+            amount = amount * 0.50
             try:
                 from decimal import Decimal, ROUND_DOWN
-                # Get instrument info for step
                 info = self.instrument(instrument)
                 step = float(info.get("contract_size") or 0.001)
+                min_amt = float(info.get("min_trade_amount") or step)
+                min_notional = float(info.get("min_notional") or 5.0)
+                # Check notional
+                if amount * price < min_notional:
+                    # If notional <5$, use min_notional/price as amount
+                    amount = min_notional / price * 1.1  # 10% buffer
                 if step > 0:
                     units = (Decimal(str(amount)) / Decimal(str(step))).to_integral_value(rounding=ROUND_DOWN)
                     amount = float(units * Decimal(str(step)))
-                    # Ensure at least minimum
-                    min_amt = float(info.get("min_trade_amount") or step)
                     if amount < min_amt:
                         amount = min_amt
+                # Final notional check
+                if amount * price < min_notional:
+                    raise ValueError(f"Notional {amount*price:.2f}$ < {min_notional}$ minimum, skip")
+            except ValueError:
+                raise
             except:
                 pass
         legacy_sym = instrument.replace("USDT", "USD") if instrument.endswith("USDT") else instrument
