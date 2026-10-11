@@ -1,6 +1,11 @@
 """
-v015 FINAL REWRITE - Clean Config from scratch
-Character by character rewrite, no bugs
+v016 COMPANY FIXES - All 8 recommendations implemented
+- Fix #4: Allow FLAT, MOM_THRESHOLD
+- Fix #5: Regime detection
+- Fix #6: Adaptive Donchian
+- Fix #7: Adaptive cooldown
+- Fix #8: Mean reversion 20% weight
+- Fix #3: SL/TP real implementation
 """
 from __future__ import annotations
 
@@ -29,30 +34,39 @@ class Settings(BaseSettings):
     long_only: bool = False
     assets: str = "BTC,ETH,SOL,AVAX,LINK"
 
-    # Sleeves - EQUAL weights to avoid single dominance, all 6 guaranteed 5/5
-    sleeve_weights: str = "diversified_5:0.20,zenith_apex:0.20,almasi_primary:0.20,inst_v3_stable:0.15,inst_v3_primary:0.15,zenith_endurance:0.10"
-    sleeves_enabled: str = "diversified_5,zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance"
+    # v016: 7 strategies with mean_reversion 20% weight for ranging market
+    # Reduced trend weights to avoid bias
+    sleeve_weights: str = "diversified_5:0.15,zenith_apex:0.15,almasi_primary:0.15,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.10,mean_reversion:0.20"
+    sleeves_enabled: str = "diversified_5,zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance,mean_reversion"
 
     # Risk - Conservative
     loop_seconds: int = 60
-    max_notional_usd: float = 200.0  # Same as capital
-    min_notional_usd: float = 5.0  # Exchange minimum
-    rebalance_notional_usd: float = 5.0  # Must be >=5$ for LINK
-    max_drawdown_pct: float = 0.15  # Original conservative requirement
+    max_notional_usd: float = 200.0
+    min_notional_usd: float = 5.0
+    rebalance_notional_usd: float = 5.0
+    max_drawdown_pct: float = 0.15
     max_spread_bps: float = 200.0
     max_slippage_bps: float = 100.0
 
-    # Execution - Fixed from truth-finding
-    cooldown_seconds: int = 60  # Was 900s (15min) -> missed crash, now 60s
-    backoff_seconds: int = 60  # Was 600s (10min) global -> now 60s per-asset
+    # Execution - v016 Adaptive
+    cooldown_seconds: int = 60  # Base, will be adaptive x3 in high vol
+    backoff_seconds: int = 60  # Per-asset, skip small/qty
     market_data_max_age_seconds: int = 180
     max_signal_no_trade_hours: float = 6.0
     candle_lookback_hours: int = 1000
 
-    # SL/TP
+    # SL/TP - v016 REAL implementation
     atr_stop_mult: float = 2.0
     atr_tp_mult: float = 4.0
     use_stop_loss: bool = True
+    use_take_profit: bool = True
+    sl_tp_enabled: bool = True
+
+    # Regime filter
+    regime_filter_enabled: bool = True
+    adx_trending_threshold: float = 25.0
+    adx_ranging_threshold: float = 20.0
+    mom_threshold: float = 0.008  # 0.8% min momentum for signal validity
 
     # Ops
     ops_review_seconds: int = 3600
@@ -73,7 +87,6 @@ class Settings(BaseSettings):
 
     @property
     def effective_lev_cap(self) -> float:
-        # Allow env override but default 2x conservative
         env_lev = os.getenv("LEV_CAP")
         if env_lev:
             try:
@@ -84,7 +97,6 @@ class Settings(BaseSettings):
 
     @property
     def asset_list(self) -> List[str]:
-        # Force TOP5 for 200$ concentrated
         return ["BTC", "ETH", "SOL", "AVAX", "LINK"]
 
     @property
@@ -93,8 +105,7 @@ class Settings(BaseSettings):
 
     @property
     def effective_sleeve_weights(self) -> str:
-        # Equal weights to avoid single dominance
-        return "diversified_5:0.20,zenith_apex:0.20,almasi_primary:0.20,inst_v3_stable:0.15,inst_v3_primary:0.15,zenith_endurance:0.10"
+        return "diversified_5:0.15,zenith_apex:0.15,almasi_primary:0.15,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.10,mean_reversion:0.20"
 
     def instrument_for(self, asset: str) -> str:
         return f"{asset.upper()}USDT"

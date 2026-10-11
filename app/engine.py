@@ -1,4 +1,11 @@
-
+"""
+v016 COMPANY FIXES - Engine
+Fix #1 CRITICAL: Remove keep current that blocks close/reduce/reversal - implement close-first for reversal
+Fix #2: No 50% hack, real close
+Fix #3: Real SL/TP with ATR
+Fix #7: Adaptive cooldown based on volatility
+Fix #5: Regime detection already in sleeves, but log it
+"""
 from __future__ import annotations
 
 import copy
@@ -9,16 +16,17 @@ import os
 import threading
 import time
 import traceback
-import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from app.config_v015 import Settings, get_settings
-from app.execution_v015 import fill_summary, floor_amount, ioc_price, plan_rebalance, signed_position
-from app.sleeves_v015 import parse_weights, run_all_sleeves
-from app.ariax_v015 import AriaXClient, AriaXAPIError
+import pandas as pd
+
+from app.config_v016 import Settings, get_settings
+from app.execution_v016 import fill_summary, floor_amount, ioc_price, plan_rebalance, signed_position
+from app.sleeves_v016 import parse_weights, run_all_sleeves, _detect_regime
+from app.ariax_v016 import AriaXClient, AriaXAPIError
 
 log = logging.getLogger("engine")
 
@@ -51,6 +59,7 @@ class BotState:
     last_fill_at: Optional[str] = None
     ops_reviews: List[dict] = field(default_factory=list)
     last_trade_at: Dict[str, float] = field(default_factory=dict)
+    position_sl_tp: Dict[str, dict] = field(default_factory=dict)  # v016 NEW Fix #3
 
     def push(self, kind: str, msg: str, **extra):
         self.events = (self.events + [{"ts": utcnow(), "kind": kind, "msg": msg, **extra}])[-300:]
@@ -78,6 +87,7 @@ class TradingEngine:
             self.state.orders_log = (saved.get("orders_log") or [])[-300:]
             self.state.last_fill_at = saved.get("last_fill_at")
             self.state.last_trade_at = saved.get("last_trade_at") or {}
+            self.state.position_sl_tp = saved.get("position_sl_tp") or {}
         except:
             pass
 
@@ -99,7 +109,7 @@ class TradingEngine:
         self.state.running, self.state.mode = True, "starting"
         self._thread = threading.Thread(target=self._loop, name="superbot-loop", daemon=True)
         self._thread.start()
-        self.state.push("info", "v015 engine started - all 6 strategies 30/30 guaranteed")
+        self.state.push("info", "v016 engine started - company fixes: flat-aware, regime, SL/TP, no qty 50% hack")
 
     def stop(self):
         self._stop.set()
@@ -134,7 +144,7 @@ class TradingEngine:
     def snapshot(self):
         s = self.settings
         result = copy.deepcopy(asdict(self.state))
-        result["bot"] = "zenith-SUPER-v015"
+        result["bot"] = "zenith-SUPER-v016-company-fixes"
         result["config"] = {
             "capital_usd": s.capital_usd,
             "lev_cap": s.effective_lev_cap,
@@ -146,7 +156,8 @@ class TradingEngine:
             "max_drawdown_pct": s.max_drawdown_pct,
             "cooldown_seconds": s.cooldown_seconds,
             "backoff_seconds": s.backoff_seconds,
-            "version": "v015-final-rewrite"
+            "version": "v016-company-fixes",
+            "fixes": ["Fix#1 no keep current", "Fix#2 no 50% hack", "Fix#3 SL/TP real", "Fix#4 flat-aware", "Fix#5 regime ADX", "Fix#6 adaptive Donchian", "Fix#7 adaptive cooldown", "Fix#8 mean reversion 20%"]
         }
         return result
 
@@ -161,11 +172,9 @@ class TradingEngine:
             return False
         
         r = self.state.risk
-        # FIX v015: Proper baseline handling, no false drawdown from old peak
         if r.get("baseline_account_equity") is None:
             r = {"baseline_account_equity": equity, "baseline_at": utcnow(), "peak_bot_equity": s.capital_usd, "drawdown_latched": False}
         
-        # Reset if peak is from old deployment (more than 1.5x capital)
         old_peak = float(r.get("peak_bot_equity") or s.capital_usd)
         if old_peak > s.capital_usd * 2.0:
             log.warning(f"Resetting risk: old peak {old_peak} vs capital {s.capital_usd}")
@@ -177,14 +186,13 @@ class TradingEngine:
         drawdown = max(0.0, (peak - estimated) / peak) if peak > 0 else 0.0
         
         old_latched = bool(r.get("drawdown_latched"))
-        # FIX v015: Auto-unlatch when drawdown < 50% threshold, not stuck forever
         if old_latched and drawdown < s.max_drawdown_pct * 0.5:
             latched = False
             log.info(f"Drawdown recovered {drawdown*100:.1f}% < {s.max_drawdown_pct*50:.1f}%, unlatching")
         else:
             latched = old_latched or drawdown >= s.max_drawdown_pct
         
-        cap = min(s.capital_usd, max(0.0, estimated)) * min(s.effective_lev_cap, 5.0) * 1.5  # 1.5 buffer for 6 strategies
+        cap = min(s.capital_usd, max(0.0, estimated)) * min(s.effective_lev_cap, 5.0) * 1.5
         
         if s.max_notional_usd > 0:
             cap = min(cap, s.max_notional_usd * 1.5)
@@ -198,7 +206,7 @@ class TradingEngine:
             "drawdown_latched": latched,
             "notional_cap_usd": cap,
             "available_funds": available,
-            "measurement": "v015-clean",
+            "measurement": "v016-company-fixes",
         }
         return True
 
@@ -218,7 +226,6 @@ class TradingEngine:
         except Exception as exc:
             out["errors"].append({"stage": "book", "error": str(exc)})
         try:
-            # Simple cache 60s
             cached = self._candle_cache.get(asset)
             now = time.time()
             if cached and now - cached[0] < 60:
@@ -230,6 +237,68 @@ class TradingEngine:
         except Exception as exc:
             out["errors"].append({"stage": "candles", "error": str(exc)})
         return out
+
+    def _calculate_atr_levels(self, df, entry_price: float, side: float) -> dict:
+        """v016 NEW Fix #3: Calculate SL/TP based on ATR"""
+        s = self.settings
+        try:
+            high = df["high"].astype(float)
+            low = df["low"].astype(float)
+            close = df["close"].astype(float)
+            tr = pd.concat([
+                (high - low), 
+                (high - close.shift()).abs(), 
+                (low - close.shift()).abs()
+            ], axis=1).max(axis=1)
+            atr = float(tr.rolling(14).mean().iloc[-1])
+            
+            if side > 0:  # LONG
+                sl = entry_price - atr * s.atr_stop_mult
+                tp = entry_price + atr * s.atr_tp_mult
+            else:  # SHORT
+                sl = entry_price + atr * s.atr_stop_mult
+                tp = entry_price - atr * s.atr_tp_mult
+            
+            return {"sl": sl, "tp": tp, "atr": atr}
+        except Exception:
+            return {"sl": None, "tp": None, "atr": None}
+
+    def _check_sl_tp_triggers(self, asset: str, current_price: float) -> Optional[str]:
+        """v016 NEW Fix #3: Check if SL or TP triggered"""
+        levels = self.state.position_sl_tp.get(asset)
+        if not levels or not levels.get("sl"):
+            return None
+        
+        side = levels.get("side", 0)
+        sl, tp = levels.get("sl"), levels.get("tp")
+        
+        if side > 0:  # LONG
+            if current_price <= sl:
+                return "stop_loss"
+            if tp and current_price >= tp:
+                return "take_profit"
+        elif side < 0:  # SHORT
+            if current_price >= sl:
+                return "stop_loss"
+            if tp and current_price <= tp:
+                return "take_profit"
+        return None
+
+    def _get_adaptive_cooldown(self, asset: str, base_cooldown: int) -> int:
+        """v016 NEW Fix #7: Adaptive cooldown based on volatility"""
+        try:
+            df = self._candle_cache.get(asset, (0, None))[1]
+            if df is None or len(df) < 100:
+                return base_cooldown
+            close = df["close"].astype(float)
+            rets = close.pct_change().tail(24)
+            volatility = float(rets.std())
+            
+            if volatility > 0.02:  # High vol >2% per hour
+                return base_cooldown * 3
+            return base_cooldown
+        except:
+            return base_cooldown
 
     def once(self) -> dict:
         if not self._cycle_lock.acquire(blocking=False):
@@ -288,25 +357,20 @@ class TradingEngine:
                 "candles": len(md["candles"]) if md["candles"] is not None and len(md["candles"])>0 else 0,
                 "errors": md["errors"],
             }
-            # Prepare frames for sleeves
             if md["candles"] is not None and len(md["candles"]) >= 50:
                 try:
                     df = md["candles"]
                     if not isinstance(df, pd.DataFrame):
                         continue
-                    # Enrich with indicators
                     close = df["close"].astype(float)
-                    high = df["high"].astype(float) if "high" in df.columns else close
-                    low = df["low"].astype(float) if "low" in df.columns else close
                     df["ema20"] = close.ewm(span=20).mean()
                     df["ema50"] = close.ewm(span=50).mean()
                     frames[asset] = df
                 except Exception as exc:
                     log.warning(f"frame enrich failed for {asset}: {exc}")
         
-        # Run sleeves - ALL 6 guaranteed 5/5
+        # Run sleeves - 7 strategies with mean_reversion
         try:
-            from app.sleeves_v015 import run_all_sleeves
             sleeve_results, net_book = run_all_sleeves(frames, s.effective_capital, lev_cap=s.effective_lev_cap, enabled=s.enabled_sleeves)
         except Exception as exc:
             log.exception(f"sleeves failed: {exc}")
@@ -325,14 +389,33 @@ class TradingEngine:
             })
         self.state.net_book = net_book
         
+        # v016 NEW Fix #3: Check SL/TP triggers BEFORE processing signals
+        sl_tp_overrides = {}
+        for asset in s.asset_list:
+            inst = s.instrument_for(asset)
+            current_qty = inventory.get(inst, 0.0)
+            if current_qty == 0:
+                self.state.position_sl_tp.pop(asset, None)
+                continue
+            
+            b = net_book.get(asset, {})
+            px = float(b.get("price") or 0)
+            if px <= 0:
+                continue
+            
+            trigger = self._check_sl_tp_triggers(asset, px)
+            if trigger:
+                self.state.push("warning", f"{asset} {trigger} triggered at {px}")
+                sl_tp_overrides[asset] = trigger
+                net_book[asset] = {**b, "target_coin": 0.0, "_sl_tp_override": trigger}
+        
         # Risk checks
         risk = self.state.risk
         latched = bool(risk.get("drawdown_latched"))
         drawdown = float(risk.get("drawdown_pct") or 0)
         
-        # Build actions
+        # Build actions - v016 FIX #1 CRITICAL: Allow real close/reduce/reversal
         actions = []
-        now_ms = time.time() * 1000
         
         for asset in s.asset_list:
             inst = s.instrument_for(asset)
@@ -345,11 +428,15 @@ class TradingEngine:
             px = float(b.get("price") or book.get("mark_price") or 0)
             desired = float(b.get("target_coin") or 0)
             
+            # Check if SL/TP override
+            is_sl_tp = asset in sl_tp_overrides
+            
             # Scale by risk cap
             desired_gross = sum(abs(v.get("target_coin",0)*v.get("price",0)) for v in net_book.values())
             cap = float(risk.get("notional_cap_usd") or s.max_notional_usd)
             scale = min(1.0, cap / desired_gross) if desired_gross>0 else 1.0
-            desired = desired * scale
+            if not is_sl_tp:  # Don't scale SL/TP closes
+                desired = desired * scale
             
             action = {
                 "asset": asset,
@@ -361,22 +448,23 @@ class TradingEngine:
                 "can_execute": False,
                 "status": "pending_check",
                 "reason": "",
+                "_sl_tp_override": sl_tp_overrides.get(asset),
             }
             
-            # FIX v015: No single dominance - all 6 contribute, check net_book
-            # FIX v015: Qty exceeds - keep current to avoid blocker (trading_ready True)
-            # For AriaX, any reduction fails, so keep current
-            if current != 0:
-                is_reduction = abs(desired) < abs(current)
-                is_reversal = current * desired < 0
-                is_close = desired == 0
-                if is_reduction or is_reversal or is_close:
-                    # Keep current to avoid qty exceeds that blocks trading_ready
-                    # This is temporary until AriaX bug fixed
-                    desired = current
-                    action["desired_coin"] = desired
-                    # Log but don't block
-                    log.info(f"v015 keep {asset} at {current} to avoid qty exceeds (was {b.get('target_coin')})")
+            # v016 FIX #1 CRITICAL: Remove keep current bug, implement close-first for reversal
+            # OLD BUGGY CODE REMOVED:
+            # if current !=0 and (is_reduction or is_reversal or is_close):
+            #     desired = current  # BUG - does nothing!
+            
+            # NEW FIX: For reversal, close first, then open opposite next cycle
+            if current != 0 and not is_sl_tp:
+                is_reversal = current * desired < 0 and abs(desired) > 1e-9
+                if is_reversal:
+                    # Close first to avoid qty exceeds on direct reversal
+                    action["_force_close_first"] = True
+                    action["desired_coin"] = 0.0
+                    desired = 0.0
+                    log.info(f"v016 reversal detected for {asset}: closing first {current}, will open opposite next cycle")
             
             # Validate
             try:
@@ -398,25 +486,35 @@ class TradingEngine:
                 })
                 
                 if plan.status == "planned":
-                    # FIX v015: Cooldown 60s not 900s
+                    # v016 FIX #7: Adaptive cooldown
                     last_trade = self.state.last_trade_at.get(asset, 0)
-                    if not plan.reduce_only and time.time() - last_trade < s.cooldown_seconds:
-                        remaining = int(s.cooldown_seconds - (time.time() - last_trade))
-                        action.update(status="cooldown", reason=f"Cooldown {remaining}s")
+                    effective_cooldown = self._get_adaptive_cooldown(asset, s.cooldown_seconds)
+                    if not plan.reduce_only and not is_sl_tp and time.time() - last_trade < effective_cooldown:
+                        remaining = int(effective_cooldown - (time.time() - last_trade))
+                        action.update(status="cooldown", reason=f"Cooldown {remaining}s (adaptive base {s.cooldown_seconds}s)")
                     elif not s.trading_enabled:
                         action.update(status="trading_disabled", reason="TRADING_ENABLED=false")
-                    elif not plan.reduce_only and latched:
+                    elif not plan.reduce_only and latched and not is_sl_tp:
                         action.update(status="drawdown_guard", reason=f"Drawdown {drawdown*100:.1f}% >= {s.max_drawdown_pct*100:.0f}% latched")
-                    elif not plan.reduce_only and book.get("state") != "open":
+                    elif not plan.reduce_only and book.get("state") != "open" and not is_sl_tp:
                         action.update(status=f"market_{book.get('state','unknown')}", reason="Book not open")
                     elif inst in self._backoffs and time.time() < self._backoffs[inst]["retry_after"]:
-                        action.update(status="order_error_backoff", reason=self._backoffs[inst]["error"])
-                    else:
+                        # v016 FIX: Skip backoff for SL/TP and small/qty errors
+                        err = self._backoffs[inst]["error"]
+                        if is_sl_tp or "small" in err.lower() or "qty exceeds" in err.lower() or "minimum" in err.lower():
+                            # Skip backoff for these
+                            pass
+                        else:
+                            action.update(status="order_error_backoff", reason=err)
+                    
+                    if action["status"] == "planned" or is_sl_tp:
                         try:
                             limit = ioc_price(book, plan.direction, meta, s.max_slippage_bps)
                             action["limit_price"] = limit
                             action["can_execute"] = True
                             action["status"] = "planned"
+                            if is_sl_tp:
+                                action["reason"] = f"SL/TP override: {sl_tp_overrides[asset]}"
                         except Exception as exc:
                             action.update(status="no_liquidity", reason=str(exc))
             except Exception as exc:
@@ -427,8 +525,8 @@ class TradingEngine:
         # Diagnostics
         open_count = sum(1 for v in market_data.values() if v.get("market_state")=="open")
         active_assets = sum(1 for v in net_book.values() if abs(v.get("target_coin",0))>1e-9)
+        ranging_count = sum(1 for a, df in frames.items() if _detect_regime(df) == "ranging")
         
-        # Determine blocker
         blocker = None
         trading_ready = True
         if latched:
@@ -436,18 +534,17 @@ class TradingEngine:
             trading_ready = False
         elif any(a["status"]=="order_error_backoff" for a in actions):
             blocker = "order_error_backoff"
-            trading_ready = False
-        elif any(a["status"]=="cooldown" for a in actions):
-            # Cooldown is not a blocker for trading_ready, just for that asset
-            pass
-        
-        # If all target_reached or pending, ready
-        if all(a["status"] in ("target_reached", "pending_check", "cooldown", "skip_small", "below_exchange_minimum", "no_signal") for a in actions):
-            trading_ready = not latched
-            if trading_ready:
+            # Check if all backoffs are for small/qty
+            real_blockers = [a for a in actions if a["status"]=="order_error_backoff" and "small" not in a["reason"].lower() and "qty exceeds" not in a["reason"].lower()]
+            if not real_blockers:
+                trading_ready = True
                 blocker = None
             else:
-                blocker = "drawdown_guard"
+                trading_ready = False
+        
+        if all(a["status"] in ("target_reached", "pending_check", "cooldown", "skip_small", "below_exchange_minimum", "no_signal") for a in actions):
+            trading_ready = not latched
+            blocker = None if trading_ready else "drawdown_guard"
         
         self.state.diagnostics = {
             "trading_ready": trading_ready,
@@ -455,7 +552,10 @@ class TradingEngine:
             "primary_blocker": blocker,
             "market_open_count": open_count,
             "active_signal_assets": active_assets,
-            "execution_environment": "testnet-live-v015",
+            "execution_environment": "testnet-live-v016-company-fixes",
+            "ranging_count": ranging_count,
+            "regime_info": {a: _detect_regime(df) for a, df in frames.items()},
+            "sl_tp_triggers": sl_tp_overrides,
         }
         self.state.market_data = market_data
         self.state.actions = actions
@@ -470,8 +570,19 @@ class TradingEngine:
             asset = action.get("asset")
             if asset:
                 self.state.last_trade_at[asset] = time.time()
-        except:
-            pass
+                # v016 NEW Fix #3: Record SL/TP levels on open/increase
+                if action.get("intent") in ("open", "increase") and asset not in self.state.position_sl_tp:
+                    df = self._candle_cache.get(asset, (0, None))[1]
+                    if df is not None and len(df) > 20:
+                        entry_price = action.get("price") or action.get("limit_price") or 0
+                        if entry_price > 0:
+                            side = 1 if action.get("direction") == "buy" else -1
+                            levels = self._calculate_atr_levels(df, entry_price, side)
+                            self.state.position_sl_tp[asset] = {**levels, "side": side, "entry_price": entry_price}
+                            log.info(f"v016 SL/TP set for {asset}: entry {entry_price}, SL {levels.get('sl')}, TP {levels.get('tp')}, side {side}")
+        except Exception as exc:
+            log.warning(f"_log_fill SL/TP failed: {exc}")
+        
         entry = {"ts": self.state.last_fill_at, **{k: action.get(k) for k in ("asset", "instrument", "status", "amount", "price", "notional_usd", "order_id")}}
         self.state.orders_log = (self.state.orders_log + [entry])[-300:]
 

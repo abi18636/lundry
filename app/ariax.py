@@ -1,6 +1,7 @@
 """
-v015 FINAL REWRITE - Clean AriaX Client from scratch
-Fixes qty exceeds bug with 50% close and market orders
+v016 COMPANY FIXES - AriaX Client
+Fix #2 ROOT: Close position with live fetch + 0.999 safety + 95% retry, not 50% hack
+Fix #1: Allow real close/reduce/reversal
 """
 from __future__ import annotations
 
@@ -9,7 +10,6 @@ import hmac
 import logging
 import time
 from typing import Any, Dict, List, Optional
-import itertools
 
 import httpx
 import pandas as pd
@@ -205,7 +205,6 @@ class AriaXClient:
             if not all_rows:
                 return pd.DataFrame()
             
-            # Parse: [timestamp, open, high, low, close, volume, turnover]
             df = pd.DataFrame(all_rows, columns=["timestamp", "open", "high", "low", "close", "volume", "turnover"])
             df["timestamp"] = pd.to_numeric(df["timestamp"], errors="coerce")
             for col in ["open", "high", "low", "close", "volume"]:
@@ -266,25 +265,10 @@ class AriaXClient:
         except:
             return {}
 
-    # Trading - FIXED for qty exceeds
+    # Trading - v016 FIX: No 50% hack, real floor with 0.999 safety
     def _place_order(self, symbol: str, side: str, qty: float, order_type: str = "market", price: Optional[float] = None, reduce_only: bool = False, label: str = "") -> dict:
-        # FIX v015: For reduceOnly, use 50% qty to avoid qty exceeds bug
-        if reduce_only:
-            qty = qty * 0.50
-        
-        # Ensure minimum notional 5$
-        try:
-            info = self.instrument(symbol)
-            min_notional = float(info.get("min_notional") or 5.0)
-            # We don't have price for market orders, skip notional check for market
-            if order_type == "limit" and price:
-                if qty * price < min_notional:
-                    raise AriaXAPIError("order", -1, f"notional below minimum {min_notional} USD")
-        except AriaXAPIError:
-            raise
-        except:
-            pass
-        
+        # v016 FIX: No 50% forced reduction - use real qty with floor
+        # Safety: 0.999 already applied in execution.py plan_rebalance
         body = {
             "symbol": symbol.replace("USDT", "USD") if symbol.endswith("USDT") else symbol,
             "side": side,
@@ -299,25 +283,16 @@ class AriaXClient:
         return data
 
     def limit_ioc(self, instrument: str, direction: str, amount: float, price: float, label: str, reduce_only: bool = False) -> dict:
-        # FIX v015: Use 50% for reduceOnly to avoid qty exceeds
-        if reduce_only:
-            amount = amount * 0.50
-        
         legacy_sym = instrument.replace("USDT", "USD") if instrument.endswith("USDT") else instrument
-        
-        # Try without reduceOnly if with fails (AriaX reduceOnly bug)
         try:
             return self._place_order(legacy_sym, direction, amount, "limit", price, reduce_only=reduce_only, label=label)
         except AriaXAPIError as exc:
             if "qty exceeds" in str(exc).lower() and reduce_only:
-                # Retry without reduceOnly flag
                 log.warning(f"limit_ioc qty exceeds with reduceOnly, retrying without flag for {instrument}")
                 return self._place_order(legacy_sym, direction, amount, "limit", price, reduce_only=False, label=label)
             raise
 
     def buy_market(self, instrument: str, amount: float, label: str = "zenith", reduce_only: bool = False) -> dict:
-        if reduce_only:
-            amount = amount * 0.50
         legacy_sym = instrument.replace("USDT", "USD") if instrument.endswith("USDT") else instrument
         try:
             return self._place_order(legacy_sym, "buy", amount, "market", reduce_only=reduce_only, label=label)
@@ -327,8 +302,6 @@ class AriaXClient:
             raise
 
     def sell_market(self, instrument: str, amount: float, label: str = "zenith", reduce_only: bool = False) -> dict:
-        if reduce_only:
-            amount = amount * 0.50
         legacy_sym = instrument.replace("USDT", "USD") if instrument.endswith("USDT") else instrument
         try:
             return self._place_order(legacy_sym, "sell", amount, "market", reduce_only=reduce_only, label=label)
@@ -338,19 +311,61 @@ class AriaXClient:
             raise
 
     def close_position(self, instrument: str) -> dict:
+        """
+        v016 FIX ROOT: Always fetch LIVE position from exchange (not cached state)
+        and close with exact floored size + 0.999 safety, not 50% hack.
+        Retry gradually 95% if qty exceeds.
+        """
         try:
+            # Step 1: LIVE fetch (not cached)
             pos = self.positions()
+            target_pos = None
             for p in pos:
                 if p.get("instrument_name") == instrument:
-                    size = float(p.get("size_currency") or 0)
-                    direction = p.get("direction", "")
-                    if abs(size) > 0:
-                        close_size = abs(size) * 0.50
-                        if direction.lower() in ("buy", "long"):
-                            return self.sell_market(instrument, close_size, label=f"close_{instrument.lower()}", reduce_only=False)
-                        else:
-                            return self.buy_market(instrument, close_size, label=f"close_{instrument.lower()}", reduce_only=False)
-            raise AriaXAPIError("close_position", -1, "position not found")
+                    target_pos = p
+                    break
+            
+            if not target_pos:
+                raise AriaXAPIError("close_position", -1, "position not found")
+            
+            size = float(target_pos.get("size_currency") or target_pos.get("size") or 0)
+            direction = target_pos.get("direction", "")
+            if abs(size) <= 0:
+                return {"ok": True, "message": "no position to close"}
+            
+            # Step 2: Get step size and floor with 0.999 safety (never round up)
+            meta = self.instrument(instrument)
+            step = float(meta.get("contract_size") or 0.001)
+            
+            from app.execution_v016 import floor_amount
+            safe_size = floor_amount(abs(size) * 0.999, step)
+            
+            if safe_size <= 0:
+                return {"ok": True, "message": "position below minimum, already effectively closed"}
+            
+            # Step 3: Try full close (not 50%)
+            try:
+                if direction.lower() in ("buy", "long"):
+                    return self.sell_market(instrument, safe_size, label=f"close_{instrument.lower()}", reduce_only=True)
+                else:
+                    return self.buy_market(instrument, safe_size, label=f"close_{instrument.lower()}", reduce_only=True)
+            except AriaXAPIError as exc:
+                if "qty exceeds" in str(exc).lower():
+                    # Step 4: Real fallback - gradual 95% retry, not random 50%
+                    retry_size = safe_size
+                    for attempt in range(5):
+                        retry_size = floor_amount(retry_size * 0.95, step)
+                        if retry_size <= 0:
+                            break
+                        try:
+                            if direction.lower() in ("buy", "long"):
+                                return self.sell_market(instrument, retry_size, label=f"close_retry_{instrument.lower()}", reduce_only=True)
+                            else:
+                                return self.buy_market(instrument, retry_size, label=f"close_retry_{instrument.lower()}", reduce_only=True)
+                        except AriaXAPIError:
+                            continue
+                    raise AriaXAPIError("close_position", -1, f"failed to close after 5 retries, size={safe_size}")
+                raise
         except Exception as exc:
             if isinstance(exc, AriaXAPIError):
                 raise
