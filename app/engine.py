@@ -406,9 +406,15 @@ class TradingEngine:
             except:
                 continue
         
+        # v018 FIXED3 ABSOLUTE 10 assets - ignore env
+        ALLOWED_10 = ["BTC", "ETH", "SOL", "AVAX", "LINK", "XRP", "DOGE", "ADA", "DOT", "LTC"]
+        raw_list = s.asset_list
+        filtered_list = [a for a in raw_list if a in ALLOWED_10]
+        if len(filtered_list) != 10:
+            filtered_list = ALLOWED_10
         market_data = {}
         frames = {}
-        for asset in s.asset_list:
+        for asset in filtered_list:
             md = self._fetch_asset(asset)
             market_data[asset] = {
                 "instrument": md["instrument"],
