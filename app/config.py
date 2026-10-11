@@ -1,12 +1,12 @@
+"""
+v018 FIXED3 - ABSOLUTE FORCE 10 pairs, 7 sleeves
+Fixes Render dashboard env var with 25 assets
+"""
 from __future__ import annotations
 from functools import lru_cache
 from typing import List
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-# v018 FIXED3 - ABSOLUTE FORCE 10 pairs, 7 sleeves, no env override possible
-# This fixes Render dashboard env vars that had 25 assets 5 sleeves
-# Even if Render UI has ASSETS=25, we return only 10
 
 ALLOWED_ASSETS_10 = ["BTC", "ETH", "SOL", "AVAX", "LINK", "XRP", "DOGE", "ADA", "DOT", "LTC"]
 ALLOWED_SLEEVES_7 = ["diversified_5", "zenith_apex", "almasi_primary", "inst_v3_stable", "inst_v3_primary", "zenith_endurance", "mean_reversion"]
@@ -91,11 +91,9 @@ class Settings(BaseSettings):
         return 2.0
     @property
     def asset_list(self) -> List[str]:
-        # ABSOLUTE FORCE - ignore everything, return only 10
         return ALLOWED_ASSETS_10.copy()
     @property
     def enabled_sleeves(self) -> List[str]:
-        # ABSOLUTE FORCE - 7 sleeves
         return ALLOWED_SLEEVES_7.copy()
     @property
     def effective_sleeve_weights(self) -> str:

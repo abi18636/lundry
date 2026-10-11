@@ -1,124 +1,108 @@
 """
-v015 FINAL REWRITE - Clean Config from scratch
-Character by character rewrite, no bugs
+v018 FIXED3 - ABSOLUTE FORCE 10 pairs, 7 sleeves
+Fixes Render dashboard env var with 25 assets
 """
 from __future__ import annotations
-
-import os
 from functools import lru_cache
-from typing import Dict, List
-
+from typing import List
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+ALLOWED_ASSETS_10 = ["BTC", "ETH", "SOL", "AVAX", "LINK", "XRP", "DOGE", "ADA", "DOT", "LTC"]
+ALLOWED_SLEEVES_7 = ["diversified_5", "zenith_apex", "almasi_primary", "inst_v3_stable", "inst_v3_primary", "zenith_endurance", "mean_reversion"]
+ALLOWED_WEIGHTS = "diversified_5:0.15,zenith_apex:0.15,almasi_primary:0.15,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.10,mean_reversion:0.20"
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-    # AriaX Exchange
     ariax_base_url: str = Field(default="https://dryclean-app-1.onrender.com")
     ariax_api_key: str = Field(default="arx-karoon177-fixed-9d4e7c1a")
     ariax_api_secret: str = Field(default="Kf9mWx2vQz7RtN4pZb8LhY3jT6sEgUa5cHn1oPzIkM0yBvVXe")
     ariax_fallback_url: str = Field(default="https://dryclean-app-1.onrender.com")
-
-    # Trading
     trading_enabled: bool = True
     dry_run: bool = False
     capital_usd: float = Field(default=200.0, gt=0)
-    lev_cap: float = Field(default=2.0, gt=0, le=5.0)  # Conservative 2x for 15% DD
+    lev_cap: float = Field(default=2.0, gt=0, le=5.0)
     long_only: bool = False
-    assets: str = "BTC,ETH,SOL,AVAX,LINK"
-
-    # Sleeves - EQUAL weights to avoid single dominance, all 6 guaranteed 5/5
-    sleeve_weights: str = "diversified_5:0.20,zenith_apex:0.20,almasi_primary:0.20,inst_v3_stable:0.15,inst_v3_primary:0.15,zenith_endurance:0.10"
-    sleeves_enabled: str = "diversified_5,zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance"
-
-    # Risk - Conservative
+    assets: str = "BTC,ETH,SOL,AVAX,LINK,XRP,DOGE,ADA,DOT,LTC"
+    sleeve_weights: str = "diversified_5:0.15,zenith_apex:0.15,almasi_primary:0.15,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.10,mean_reversion:0.20"
+    sleeves_enabled: str = "diversified_5,zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance,mean_reversion"
     loop_seconds: int = 60
-    max_notional_usd: float = 200.0  # Same as capital
-    min_notional_usd: float = 5.0  # Exchange minimum
-    rebalance_notional_usd: float = 5.0  # Must be >=5$ for LINK
-    max_drawdown_pct: float = 0.15  # Original conservative requirement
+    max_notional_usd: float = 200.0
+    min_notional_usd: float = 5.0
+    rebalance_notional_usd: float = 5.0
+    max_drawdown_pct: float = 0.15
     max_spread_bps: float = 200.0
     max_slippage_bps: float = 100.0
-
-    # Execution - Fixed from truth-finding
-    cooldown_seconds: int = 60  # Was 900s (15min) -> missed crash, now 60s
-    backoff_seconds: int = 60  # Was 600s (10min) global -> now 60s per-asset
+    cooldown_seconds: int = 60
+    backoff_seconds: int = 60
     market_data_max_age_seconds: int = 180
     max_signal_no_trade_hours: float = 6.0
     candle_lookback_hours: int = 1000
-
-    # SL/TP
     atr_stop_mult: float = 2.0
     atr_tp_mult: float = 4.0
     use_stop_loss: bool = True
-
-    # Ops
+    use_take_profit: bool = True
+    sl_tp_enabled: bool = True
+    confluence_enabled: bool = True
+    confluence_min_agreement: int = 3
+    confluence_min_confidence: float = 0.55
+    vol_targeting_enabled: bool = True
+    target_vol_annual: float = 0.40
+    correlation_enabled: bool = True
+    correlation_default: float = 0.7
+    correlation_cap_enabled: bool = True
+    smart_exit_enabled: bool = True
+    trailing_stop_atr: float = 1.5
+    breakeven_atr: float = 1.0
+    partial_take_atr: float = 2.0
+    partial_take_fraction: float = 0.5
+    meta_allocator_enabled: bool = True
+    meta_lookback_trades: int = 20
+    meta_min_weight: float = 0.03
+    meta_max_weight: float = 0.35
+    cost_filter_enabled: bool = True
+    fee_bps: float = 10.0
+    slippage_bps: float = 15.0
+    min_edge_bps: float = 5.0
+    regime_filter_enabled: bool = True
+    adx_trending_threshold: float = 25.0
+    adx_ranging_threshold: float = 20.0
+    mom_threshold: float = 0.008
+    test_trade_enabled: bool = True
+    test_trade_asset: str = "BTC"
+    test_trade_hold_seconds: int = 60
+    test_trade_max_notional_usd: float = 10.0
     ops_review_seconds: int = 3600
     dashboard_token: str = ""
     log_level: str = "INFO"
     state_path: str = "state/bot_state.json"
-
-    # Telegram
     telegram_enabled: bool = True
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     telegram_bot_username: str = "TestTraid_bot"
     report_timezone: str = "Europe/Istanbul"
+    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED3"
 
     @property
     def effective_capital(self) -> float:
         return 200.0
-
     @property
     def effective_lev_cap(self) -> float:
-        # Allow env override but default 2x conservative
-        env_lev = os.getenv("LEV_CAP")
-        if env_lev:
-            try:
-                return min(float(env_lev), 5.0)
-            except:
-                pass
         return 2.0
-
     @property
     def asset_list(self) -> List[str]:
-        # Force TOP5 for 200$ concentrated
-        return ["BTC", "ETH", "SOL", "AVAX", "LINK"]
-
+        return ALLOWED_ASSETS_10.copy()
     @property
     def enabled_sleeves(self) -> List[str]:
-        return [x.strip() for x in self.sleeves_enabled.split(",") if x.strip()]
-
+        return ALLOWED_SLEEVES_7.copy()
     @property
     def effective_sleeve_weights(self) -> str:
-        # Equal weights to avoid single dominance
-        return "diversified_5:0.20,zenith_apex:0.20,almasi_primary:0.20,inst_v3_stable:0.15,inst_v3_primary:0.15,zenith_endurance:0.10"
-
+        return ALLOWED_WEIGHTS
     def instrument_for(self, asset: str) -> str:
         return f"{asset.upper()}USDT"
-
-    @property
-    def test_trade_enabled(self) -> bool:
-        return False
-
-    @property
-    def test_trade_asset(self) -> str:
-        return "BTC"
-
-    @property
-    def test_trade_hold_seconds(self) -> int:
-        return 60
-
-    @property
-    def test_trade_max_notional_usd(self) -> float:
-        return 10.0
-
     @property
     def effective_test_trade_enabled(self) -> bool:
-        return False
-
+        return True
 
 @lru_cache
 def get_settings() -> Settings:
