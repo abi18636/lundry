@@ -6,6 +6,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
+    autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.8"
@@ -30,15 +31,15 @@ services:
       - key: ASSETS
         value: BTC,ETH,SOL,AVAX,LINK
       - key: SLEEVE_WEIGHTS
-        value: "diversified_5:0.30,zenith_apex:0.20,almasi_primary:0.20,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.05"
+        value: "diversified_5:0.15,zenith_apex:0.15,almasi_primary:0.15,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.10,mean_reversion:0.20"
       - key: SLEEVES_ENABLED
-        value: "diversified_5,zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance"
+        value: "diversified_5,zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance,mean_reversion"
       - key: LOOP_SECONDS
         value: "60"
       - key: MAX_NOTIONAL_USD
         value: "200"
       - key: MIN_NOTIONAL_USD
-        value: "10"
+        value: "5"
       - key: CANDLE_LOOKBACK_HOURS
         value: "1000"
       - key: TELEGRAM_TRADE_ONLY

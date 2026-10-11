@@ -1,8 +1,6 @@
-"""
-Backward compatibility shim - now uses AriaXClient
-Deribit exchange completely removed per user request - history wiped
-"""
-from app.ariax import AriaXClient, AriaXAPIError, DeribitClient
+"""Shim for backward compatibility - Deribit -> AriaX"""
+from app.ariax import AriaXClient, AriaXAPIError
 
-# Alias for old imports
+# Aliases for old code
+DeribitClient = AriaXClient
 DeribitAPIError = AriaXAPIError
