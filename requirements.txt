@@ -6,3 +6,4 @@ numpy==2.2.1
 pydantic==2.10.4
 pydantic-settings==2.7.0
 python-dotenv==1.0.1
+# force rebuild Sun Oct 11 20:06:39 UTC 2026

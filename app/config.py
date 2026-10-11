@@ -1,9 +1,16 @@
 from __future__ import annotations
-import os
 from functools import lru_cache
 from typing import List
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# v018 FIXED3 - ABSOLUTE FORCE 10 pairs, 7 sleeves, no env override possible
+# This fixes Render dashboard env vars that had 25 assets 5 sleeves
+# Even if Render UI has ASSETS=25, we return only 10
+
+ALLOWED_ASSETS_10 = ["BTC", "ETH", "SOL", "AVAX", "LINK", "XRP", "DOGE", "ADA", "DOT", "LTC"]
+ALLOWED_SLEEVES_7 = ["diversified_5", "zenith_apex", "almasi_primary", "inst_v3_stable", "inst_v3_primary", "zenith_endurance", "mean_reversion"]
+ALLOWED_WEIGHTS = "diversified_5:0.15,zenith_apex:0.15,almasi_primary:0.15,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.10,mean_reversion:0.20"
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -74,7 +81,7 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
     telegram_bot_username: str = "TestTraid_bot"
     report_timezone: str = "Europe/Istanbul"
-    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED2"
+    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED3"
 
     @property
     def effective_capital(self) -> float:
@@ -84,13 +91,15 @@ class Settings(BaseSettings):
         return 2.0
     @property
     def asset_list(self) -> List[str]:
-        return ["BTC", "ETH", "SOL", "AVAX", "LINK", "XRP", "DOGE", "ADA", "DOT", "LTC"]
+        # ABSOLUTE FORCE - ignore everything, return only 10
+        return ALLOWED_ASSETS_10.copy()
     @property
     def enabled_sleeves(self) -> List[str]:
-        return ["diversified_5", "zenith_apex", "almasi_primary", "inst_v3_stable", "inst_v3_primary", "zenith_endurance", "mean_reversion"]
+        # ABSOLUTE FORCE - 7 sleeves
+        return ALLOWED_SLEEVES_7.copy()
     @property
     def effective_sleeve_weights(self) -> str:
-        return "diversified_5:0.15,zenith_apex:0.15,almasi_primary:0.15,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.10,mean_reversion:0.20"
+        return ALLOWED_WEIGHTS
     def instrument_for(self, asset: str) -> str:
         return f"{asset.upper()}USDT"
     @property
