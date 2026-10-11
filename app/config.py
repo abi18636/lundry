@@ -1,17 +1,13 @@
 """
-v016 COMPANY FIXES - All 8 recommendations implemented
-- Fix #4: Allow FLAT, MOM_THRESHOLD
-- Fix #5: Regime detection
-- Fix #6: Adaptive Donchian
-- Fix #7: Adaptive cooldown
-- Fix #8: Mean reversion 20% weight
-- Fix #3: SL/TP real implementation
+v017 STRATEGY PERFORMANCE UPGRADE - 7 Layers
+From bug fixing to real decision quality upgrade
+Philosophy: From Always-On 100% to Signal-Quality-On 30-60% variable
 """
 from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import Dict, List
+from typing import List
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,12 +26,11 @@ class Settings(BaseSettings):
     trading_enabled: bool = True
     dry_run: bool = False
     capital_usd: float = Field(default=200.0, gt=0)
-    lev_cap: float = Field(default=2.0, gt=0, le=5.0)  # Conservative 2x for 15% DD
+    lev_cap: float = Field(default=2.0, gt=0, le=5.0)
     long_only: bool = False
     assets: str = "BTC,ETH,SOL,AVAX,LINK"
 
-    # v016: 7 strategies with mean_reversion 20% weight for ranging market
-    # Reduced trend weights to avoid bias
+    # v017: 7 strategies with mean_reversion 20%
     sleeve_weights: str = "diversified_5:0.15,zenith_apex:0.15,almasi_primary:0.15,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.10,mean_reversion:0.20"
     sleeves_enabled: str = "diversified_5,zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance,mean_reversion"
 
@@ -48,25 +43,58 @@ class Settings(BaseSettings):
     max_spread_bps: float = 200.0
     max_slippage_bps: float = 100.0
 
-    # Execution - v016 Adaptive
-    cooldown_seconds: int = 60  # Base, will be adaptive x3 in high vol
-    backoff_seconds: int = 60  # Per-asset, skip small/qty
+    # Execution
+    cooldown_seconds: int = 60
+    backoff_seconds: int = 60
     market_data_max_age_seconds: int = 180
     max_signal_no_trade_hours: float = 6.0
     candle_lookback_hours: int = 1000
 
-    # SL/TP - v016 REAL implementation
+    # SL/TP
     atr_stop_mult: float = 2.0
     atr_tp_mult: float = 4.0
     use_stop_loss: bool = True
     use_take_profit: bool = True
     sl_tp_enabled: bool = True
 
-    # Regime filter
+    # v017 LAYER 1: Confluence Filter
+    confluence_enabled: bool = True
+    confluence_min_agreement: int = 3  # At least 3 strategies agree
+    confluence_min_confidence: float = 0.55
+
+    # v017 LAYER 2: Volatility Targeting
+    vol_targeting_enabled: bool = True
+    target_vol_annual: float = 0.40  # 40% annual vol target
+
+    # v017 LAYER 3: Correlation-Aware
+    correlation_enabled: bool = True
+    correlation_default: float = 0.7  # Crypto correlation assumption
+    correlation_cap_enabled: bool = True
+
+    # v017 LAYER 4: Smart Exit
+    smart_exit_enabled: bool = True
+    trailing_stop_atr: float = 1.5
+    breakeven_atr: float = 1.0
+    partial_take_atr: float = 2.0
+    partial_take_fraction: float = 0.5
+
+    # v017 LAYER 5: Meta-Allocator
+    meta_allocator_enabled: bool = True
+    meta_lookback_trades: int = 20
+    meta_min_weight: float = 0.03
+    meta_max_weight: float = 0.35
+
+    # v017 LAYER 6: Cost-Aware
+    cost_filter_enabled: bool = True
+    fee_bps: float = 10.0
+    slippage_bps: float = 15.0
+    min_edge_bps: float = 5.0  # Minimum net edge after costs
+
+    # Regime
     regime_filter_enabled: bool = True
     adx_trending_threshold: float = 25.0
     adx_ranging_threshold: float = 20.0
-    mom_threshold: float = 0.008  # 0.8% min momentum for signal validity
+    mom_threshold: float = 0.008
 
     # Ops
     ops_review_seconds: int = 3600
