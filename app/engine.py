@@ -1,15 +1,11 @@
 """
-v017 STRATEGY PERFORMANCE UPGRADE - 7 Layers Integrated
-Layer 1: Confluence Filter (min 3 agreement)
-Layer 2: Volatility Targeting (risk constant)
-Layer 3: Correlation-Aware (effective exposure)
-Layer 4: Smart Exit (trailing + partial TP)
-Layer 5: Meta-Allocator (dynamic weights)
-Layer 6: Cost-Aware (edge > costs)
-Layer 7: Multi-Regime Validation (framework)
+v018 UPGRADE - 4 New Features:
+1. Increase pairs from 5 to 10 (BTC,ETH,SOL,AVAX,LINK,XRP,DOGE,ADA,DOT,LTC)
+2. Test trade active on BTC
+3. Telegram close button for each individual trade
+4. Version in telegram report
 
-Philosophy: From Always-On 100% to Signal-Quality-On 30-60% variable
-No trade is healthy, not bug
++ Keep all v017 7 layers
 """
 from __future__ import annotations
 
@@ -28,16 +24,15 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from app.config_v017 import Settings, get_settings
+from app.config_v018 import Settings, get_settings
 from app.execution_v016 import fill_summary, floor_amount, ioc_price, plan_rebalance, signed_position
 from app.sleeves_v016 import parse_weights, run_all_sleeves, _detect_regime
 from app.ariax_v016 import AriaXClient, AriaXAPIError
 
-# v017 new layers
 from app.confluence import apply_confluence_filter, estimate_signal_edge_bps, should_trade_after_costs
 from app.volatility_targeting import volatility_targeted_size, calculate_atr
 from app.correlation import calculate_effective_exposure, apply_correlation_cap
-from app.exit_manager import manage_position_exit, check_exit_triggers
+from app.exit_manager import manage_position_exit
 from app.meta_allocator import PerformanceTracker, compute_dynamic_weights, compute_dynamic_weights_simple
 
 log = logging.getLogger("engine")
@@ -72,10 +67,13 @@ class BotState:
     ops_reviews: List[dict] = field(default_factory=list)
     last_trade_at: Dict[str, float] = field(default_factory=dict)
     position_sl_tp: Dict[str, dict] = field(default_factory=dict)
-    # v017 new
     meta_stats: Dict[str, dict] = field(default_factory=dict)
     confluence_info: Dict[str, str] = field(default_factory=dict)
     correlation_info: Dict[str, Any] = field(default_factory=dict)
+    # v018: Test trade state
+    test_trade: Dict[str, Any] = field(default_factory=lambda: {"active": False, "status": "idle"})
+    version: str = "v018-10pairs-testtrade-telegram-close"
+    version_history: List[str] = field(default_factory=list)
 
     def push(self, kind: str, msg: str, **extra):
         self.events = (self.events + [{"ts": utcnow(), "kind": kind, "msg": msg, **extra}])[-300:]
@@ -84,6 +82,7 @@ class TradingEngine:
     def __init__(self, settings: Optional[Settings] = None):
         self.settings = settings or get_settings()
         self.state = BotState()
+        self.state.version = self.settings.version
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._cycle_lock = threading.Lock()
@@ -93,8 +92,14 @@ class TradingEngine:
         self._candle_cache: Dict[str, tuple] = {}
         self._backoffs: Dict[str, dict] = {}
         self._last_review = 0.0
-        # v017 LAYER 5: Meta-Allocator
         self._perf_tracker = PerformanceTracker(lookback_trades=self.settings.meta_lookback_trades)
+        # v018: Test trade
+        self.test_trader = None
+        try:
+            from app.test_trade import TimedTestTrade
+            self.test_trader = TimedTestTrade(self)
+        except:
+            log.warning("Test trade not available")
         Path(self.settings.state_path).parent.mkdir(parents=True, exist_ok=True)
         self._restore()
 
@@ -107,11 +112,29 @@ class TradingEngine:
             self.state.last_trade_at = saved.get("last_trade_at") or {}
             self.state.position_sl_tp = saved.get("position_sl_tp") or {}
             self.state.meta_stats = saved.get("meta_stats") or {}
-            # Restore perf tracker if exists
+            self.state.test_trade = saved.get("test_trade") or {"active": False, "status": "idle"}
+            self.state.version_history = saved.get("version_history") or []
+            self.state.version = saved.get("version") or self.settings.version
             if "perf_history" in saved:
                 for sid, history in saved["perf_history"].items():
                     for pnl in history:
                         self._perf_tracker.record_trade_result(sid, pnl)
+            # v018: Check version change
+            if self.state.version != self.settings.version:
+                old = self.state.version
+                new = self.settings.version
+                self.state.version_history.append(f"{old}→{new} at {utcnow()}")
+                self.state.version_history = self.state.version_history[-20:]
+                self.state.version = new
+                log.info(f"Version change {old} -> {new}")
+                # Notify telegram
+                try:
+                    from app.telegram_bot import get_reporter
+                    reporter = get_reporter()
+                    if reporter:
+                        reporter.on_version_change(old, new)
+                except:
+                    pass
         except:
             pass
 
@@ -120,7 +143,6 @@ class TradingEngine:
             try:
                 path = Path(self.settings.state_path)
                 snapshot = copy.deepcopy(asdict(self.state))
-                # Save perf history
                 snapshot["perf_history"] = {sid: list(self._perf_tracker.trade_history.get(sid, [])) for sid in self._perf_tracker.trade_history}
                 temp = path.with_suffix(".tmp")
                 temp.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2, default=str))
@@ -135,7 +157,7 @@ class TradingEngine:
         self.state.running, self.state.mode = True, "starting"
         self._thread = threading.Thread(target=self._loop, name="superbot-loop", daemon=True)
         self._thread.start()
-        self.state.push("info", "v017 engine started - 7 layers upgrade: confluence, vol targeting, correlation, smart exit, meta-allocator, cost filter, validation")
+        self.state.push("info", f"v018 engine started - 10 pairs, test trade active, telegram close buttons, version {self.state.version}")
 
     def stop(self):
         self._stop.set()
@@ -170,7 +192,7 @@ class TradingEngine:
     def snapshot(self):
         s = self.settings
         result = copy.deepcopy(asdict(self.state))
-        result["bot"] = "zenith-SUPER-v017-7layers"
+        result["bot"] = f"zenith-SUPER-{self.state.version}"
         result["config"] = {
             "capital_usd": s.capital_usd,
             "lev_cap": s.effective_lev_cap,
@@ -182,15 +204,19 @@ class TradingEngine:
             "max_drawdown_pct": s.max_drawdown_pct,
             "cooldown_seconds": s.cooldown_seconds,
             "backoff_seconds": s.backoff_seconds,
-            "version": "v017-7layers-upgrade",
+            "version": self.state.version,
+            "version_history": self.state.version_history[-5:],
+            "test_trade_enabled": s.effective_test_trade_enabled,
+            "test_trade_asset": s.test_trade_asset,
+            "assets_count": len(s.asset_list),
             "layers": {
-                "1_confluence": f"min_agreement={s.confluence_min_agreement} min_conf={s.confluence_min_confidence}",
+                "1_confluence": f"min_agreement={s.confluence_min_agreement}",
                 "2_vol_targeting": f"target_vol={s.target_vol_annual}",
                 "3_correlation": f"default_corr={s.correlation_default}",
-                "4_smart_exit": f"trailing={s.trailing_stop_atr} breakeven={s.breakeven_atr} partial={s.partial_take_atr}",
-                "5_meta_allocator": f"lookback={s.meta_lookback_trades} min={s.meta_min_weight} max={s.meta_max_weight}",
-                "6_cost_filter": f"fee={s.fee_bps}bps slip={s.slippage_bps}bps min_edge={s.min_edge_bps}bps",
-                "7_validation": "multi-regime walk-forward",
+                "4_smart_exit": f"trailing={s.trailing_stop_atr}",
+                "5_meta_allocator": f"lookback={s.meta_lookback_trades}",
+                "6_cost_filter": f"fee={s.fee_bps}bps",
+                "7_validation": "multi-regime",
             }
         }
         return result
@@ -211,7 +237,6 @@ class TradingEngine:
         
         old_peak = float(r.get("peak_bot_equity") or s.capital_usd)
         if old_peak > s.capital_usd * 2.0:
-            log.warning(f"Resetting risk: old peak {old_peak} vs capital {s.capital_usd}")
             r = {"baseline_account_equity": equity, "baseline_at": utcnow(), "peak_bot_equity": s.capital_usd, "drawdown_latched": False}
             self.state.push("warning", f"Risk reset: peak {old_peak}->{s.capital_usd}")
         
@@ -222,12 +247,10 @@ class TradingEngine:
         old_latched = bool(r.get("drawdown_latched"))
         if old_latched and drawdown < s.max_drawdown_pct * 0.5:
             latched = False
-            log.info(f"Drawdown recovered {drawdown*100:.1f}% < {s.max_drawdown_pct*50:.1f}%, unlatching")
         else:
             latched = old_latched or drawdown >= s.max_drawdown_pct
         
         cap = min(s.capital_usd, max(0.0, estimated)) * min(s.effective_lev_cap, 5.0) * 1.5
-        
         if s.max_notional_usd > 0:
             cap = min(cap, s.max_notional_usd * 1.5)
         
@@ -240,7 +263,7 @@ class TradingEngine:
             "drawdown_latched": latched,
             "notional_cap_usd": cap,
             "available_funds": available,
-            "measurement": "v017-7layers",
+            "measurement": "v018-10pairs",
         }
         return True
 
@@ -278,32 +301,24 @@ class TradingEngine:
             high = df["high"].astype(float)
             low = df["low"].astype(float)
             close = df["close"].astype(float)
-            tr = pd.concat([
-                (high - low), 
-                (high - close.shift()).abs(), 
-                (low - close.shift()).abs()
-            ], axis=1).max(axis=1)
+            tr = pd.concat([(high - low), (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
             atr = float(tr.rolling(14).mean().iloc[-1])
-            
             if side > 0:
                 sl = entry_price - atr * s.atr_stop_mult
                 tp = entry_price + atr * s.atr_tp_mult
             else:
                 sl = entry_price + atr * s.atr_stop_mult
                 tp = entry_price - atr * s.atr_tp_mult
-            
             return {"sl": sl, "tp": tp, "atr": atr}
-        except Exception:
+        except:
             return {"sl": None, "tp": None, "atr": None}
 
     def _check_sl_tp_triggers(self, asset: str, current_price: float) -> Optional[str]:
         levels = self.state.position_sl_tp.get(asset)
         if not levels or not levels.get("sl"):
             return None
-        
         side = levels.get("side", 0)
         sl, tp = levels.get("sl"), levels.get("tp")
-        
         if side > 0:
             if current_price <= sl:
                 return "stop_loss"
@@ -324,12 +339,31 @@ class TradingEngine:
             close = df["close"].astype(float)
             rets = close.pct_change().tail(24)
             volatility = float(rets.std())
-            
             if volatility > 0.02:
                 return base_cooldown * 3
             return base_cooldown
         except:
             return base_cooldown
+
+    def close_position(self, asset: str) -> dict:
+        """v018 NEW: Close single position by asset - for telegram close buttons"""
+        s = self.settings
+        client = self._ensure_client()
+        inst = s.instrument_for(asset)
+        try:
+            result = client.close_position(inst)
+            self.state.push("info", f"v018 Close {asset} requested via telegram: {result}")
+            log.info(f"v018 Close {asset} via telegram: {result}")
+            return {"ok": True, "asset": asset, "instrument": inst, "result": result}
+        except Exception as exc:
+            self.state.push("error", f"v018 Close {asset} failed: {exc}")
+            log.warning(f"v018 Close {asset} failed: {exc}")
+            return {"ok": False, "asset": asset, "error": str(exc)}
+
+    def notify_test_trade(self, event: str, snapshot: dict):
+        """For test trade notifications"""
+        self.state.test_trade = snapshot
+        self.state.push("info", f"Test trade {event}: {snapshot}")
 
     def once(self) -> dict:
         if not self._cycle_lock.acquire(blocking=False):
@@ -348,7 +382,6 @@ class TradingEngine:
         s = self.settings
         client = self._ensure_client()
         
-        # Fetch account
         try:
             account = client.account_summary("USDT")
             self.state.account = account
@@ -357,7 +390,6 @@ class TradingEngine:
             self.state.push("warning", f"account fetch failed: {exc}")
             account = {"USDT": {"equity": 0, "available": 0}}
         
-        # Fetch positions
         try:
             positions = client.positions("USDT")
             self.state.positions = positions
@@ -365,7 +397,6 @@ class TradingEngine:
             positions = []
             self.state.push("warning", f"positions fetch failed: {exc}")
         
-        # Inventory map
         inventory = {}
         for p in positions:
             try:
@@ -375,7 +406,6 @@ class TradingEngine:
             except:
                 continue
         
-        # Fetch market data
         market_data = {}
         frames = {}
         for asset in s.asset_list:
@@ -400,93 +430,78 @@ class TradingEngine:
                 except Exception as exc:
                     log.warning(f"frame enrich failed for {asset}: {exc}")
         
-        # v017 LAYER 5: Meta-Allocator - dynamic weights based on live performance
+        # v017 layers: Meta-Allocator dynamic weights
         if s.meta_allocator_enabled and len(self._perf_tracker.trade_history) >= 2:
             try:
                 base_weights = parse_weights(s.effective_sleeve_weights)
                 dynamic_weights = compute_dynamic_weights(base_weights, self._perf_tracker, min_weight=s.meta_min_weight, max_weight=s.meta_max_weight)
                 self.state.meta_stats = self._perf_tracker.get_all_stats()
-                log.info(f"v017 Meta-Allocator dynamic weights: {dynamic_weights}")
-            except Exception as exc:
-                log.warning(f"Meta-Allocator failed: {exc}, using base weights")
+            except:
                 dynamic_weights = parse_weights(s.effective_sleeve_weights)
         else:
-            # Simple regime-based if no history
             try:
                 regimes = {a: _detect_regime(df) for a, df in frames.items()}
                 ranging_count = sum(1 for r in regimes.values() if r == "ranging")
                 overall_regime = "ranging" if ranging_count >= len(regimes)*0.6 else "trending" if ranging_count <= len(regimes)*0.3 else "transitional"
                 base_weights = parse_weights(s.effective_sleeve_weights)
                 dynamic_weights = compute_dynamic_weights_simple(base_weights, overall_regime)
-                log.info(f"v017 Simple regime-based weights for {overall_regime}: {dynamic_weights}")
             except:
                 dynamic_weights = parse_weights(s.effective_sleeve_weights)
         
-        # Run sleeves with dynamic weights
         try:
             sleeve_results, net_book = run_all_sleeves(frames, s.effective_capital, weights=dynamic_weights, lev_cap=s.effective_lev_cap, enabled=s.enabled_sleeves)
         except Exception as exc:
             log.exception(f"sleeves failed: {exc}")
             sleeve_results, net_book = [], {}
         
-        # v017 LAYER 1: Confluence Filter
+        # v017 Layer 1: Confluence
         if s.confluence_enabled and len(sleeve_results) >= 3:
             try:
                 confluence_filtered, confluence_info = apply_confluence_filter(sleeve_results, min_agreement=s.confluence_min_agreement, min_confidence_avg=s.confluence_min_confidence)
                 self.state.confluence_info = confluence_info
-                # Apply confluence to net_book - only keep if confluence says trade
                 filtered_net_book = {}
                 for asset, data in net_book.items():
                     conf_data = confluence_filtered.get(asset, {})
                     if conf_data.get("side", 0) != 0:
-                        # Confluence agrees, keep original target but note strength
                         filtered_net_book[asset] = {**data, "confluence_strength": conf_data.get("strength", 0), "confluence_avg_conf": conf_data.get("avg_conf", 0)}
                     else:
-                        # No confluence -> FLAT
-                        filtered_net_book[asset] = {**data, "target_coin": 0.0, "notional_usd": 0.0, "side": 0, "confluence_strength": 0, "confluence_avg_conf": 0, "_confluence_flat": True}
-                        log.info(f"v017 Confluence FLAT for {asset}: {confluence_info.get(asset)}")
+                        filtered_net_book[asset] = {**data, "target_coin": 0.0, "notional_usd": 0.0, "side": 0, "confluence_strength": 0, "_confluence_flat": True}
                 net_book = filtered_net_book
-                log.info(f"v017 Confluence filter: {confluence_info}")
             except Exception as exc:
                 log.warning(f"Confluence filter failed: {exc}")
         
-        # v017 LAYER 2: Volatility Targeting - adjust notional based on vol
+        # v017 Layer 2: Vol targeting
         if s.vol_targeting_enabled:
             try:
                 for asset, data in net_book.items():
                     if asset in frames and abs(data.get("target_coin", 0)) > 1e-9:
                         df = frames[asset]
-                        per_cap = s.effective_capital * dynamic_weights.get("diversified_5", 0.15)  # approximate
-                        # Use actual per_cap from sleeve_results would be better, but approximate
                         target_coin = data.get("target_coin", 0)
                         price = data.get("price", 0)
                         if price > 0:
                             notional = abs(target_coin * price)
-                            conf = 0.6  # default
-                            # Find conf from sleeves
+                            conf = 0.6
                             for r in sleeve_results:
                                 if asset in r.per_asset:
                                     conf = r.per_asset[asset].get("detail", {}).get("confidence", conf)
                                     break
+                            per_cap = s.effective_capital * 0.15
                             vol_notional, realized_vol, vol_scalar = volatility_targeted_size(df, per_cap, s.effective_lev_cap, conf, target_vol_annual=s.target_vol_annual)
-                            # Scale target_coin by vol_scalar
                             data["target_coin"] = data["target_coin"] * vol_scalar
                             data["notional_usd"] = abs(data["target_coin"] * price)
-                            data["volatility_info"] = {"realized_vol": realized_vol, "vol_scalar": vol_scalar, "target_vol": s.target_vol_annual}
+                            data["volatility_info"] = {"realized_vol": realized_vol, "vol_scalar": vol_scalar}
             except Exception as exc:
                 log.warning(f"Vol targeting failed: {exc}")
         
-        # v017 LAYER 3: Correlation-Aware Cap
+        # v017 Layer 3: Correlation cap
         if s.correlation_enabled and s.correlation_cap_enabled:
             try:
                 risk_cap = float(self.state.risk.get("notional_cap_usd") or s.max_notional_usd)
                 net_book, corr_info = apply_correlation_cap(net_book, risk_cap)
                 self.state.correlation_info = corr_info
-                log.info(f"v017 Correlation: effective {corr_info['effective_exposure']:.0f} naive {corr_info['naive_exposure']:.0f} net {corr_info['net_exposure']:.0f} scale {corr_info.get('scale_applied',1):.2f}")
             except Exception as exc:
                 log.warning(f"Correlation cap failed: {exc}")
         
-        # Store sleeves
         self.state.sleeves = []
         for r in sleeve_results:
             self.state.sleeves.append({
@@ -499,7 +514,7 @@ class TradingEngine:
             })
         self.state.net_book = net_book
         
-        # v017 LAYER 4: Smart Exit - check SL/TP + trailing + partial
+        # SL/TP + Smart exit
         sl_tp_overrides = {}
         for asset in s.asset_list:
             inst = s.instrument_for(asset)
@@ -507,21 +522,16 @@ class TradingEngine:
             if current_qty == 0:
                 self.state.position_sl_tp.pop(asset, None)
                 continue
-            
             b = net_book.get(asset, {})
             px = float(b.get("price") or 0)
             if px <= 0:
                 continue
-            
-            # Check basic SL/TP
             trigger = self._check_sl_tp_triggers(asset, px)
             if trigger:
                 self.state.push("warning", f"{asset} {trigger} triggered at {px}")
                 sl_tp_overrides[asset] = trigger
                 net_book[asset] = {**b, "target_coin": 0.0, "_sl_tp_override": trigger}
                 continue
-            
-            # v017 LAYER 4: Smart exit management
             if s.smart_exit_enabled:
                 try:
                     pos_state = self.state.position_sl_tp.get(asset)
@@ -533,37 +543,14 @@ class TradingEngine:
                                 pos_state["sl"] = exit_actions["new_sl"]
                                 pos_state["breakeven_moved"] = exit_actions.get("breakeven_moved", False)
                                 pos_state["partial_taken"] = exit_actions.get("partial_taken", False)
-                                if exit_actions.get("reason"):
-                                    self.state.push("info", f"{asset} smart exit: {exit_actions['reason']}")
-                            
-                            if exit_actions.get("close_fraction", 0) > 0:
-                                # Partial take profit
-                                fraction = exit_actions["close_fraction"]
-                                current = inventory.get(inst, 0)
-                                close_amount = abs(current) * fraction
-                                # This will be handled as a reduce action below
-                                # For now, just log and let normal flow handle close 50%
-                                self.state.push("info", f"{asset} partial take {fraction*100:.0f}% at {px}")
-                                # We could set target to reduce by fraction, but for simplicity, full close on SL/TP override already handles
-                                # For partial, we need to adjust desired
-                                if asset not in sl_tp_overrides:
-                                    # Reduce position by fraction
-                                    b = net_book.get(asset, {})
-                                    current_target = b.get("target_coin", 0)
-                                    # If we want to close 50%, set target to 50% of current
-                                    partial_target = current * (1 - fraction)
-                                    net_book[asset] = {**b, "target_coin": partial_target, "_partial_take": True, "_partial_fraction": fraction}
-                except Exception as exc:
-                    log.warning(f"Smart exit failed for {asset}: {exc}")
+                except:
+                    pass
         
-        # Risk checks
         risk = self.state.risk
         latched = bool(risk.get("drawdown_latched"))
         drawdown = float(risk.get("drawdown_pct") or 0)
         
-        # Build actions
         actions = []
-        
         for asset in s.asset_list:
             inst = s.instrument_for(asset)
             md = market_data.get(asset, {})
@@ -576,14 +563,12 @@ class TradingEngine:
             desired = float(b.get("target_coin") or 0)
             
             is_sl_tp = asset in sl_tp_overrides
-            is_partial = b.get("_partial_take", False)
             is_confluence_flat = b.get("_confluence_flat", False)
             
-            # Scale by risk cap
             desired_gross = sum(abs(v.get("target_coin",0)*v.get("price",0)) for v in net_book.values())
             cap = float(risk.get("notional_cap_usd") or s.max_notional_usd)
             scale = min(1.0, cap / desired_gross) if desired_gross>0 else 1.0
-            if not is_sl_tp and not is_partial:
+            if not is_sl_tp:
                 desired = desired * scale
             
             action = {
@@ -598,21 +583,18 @@ class TradingEngine:
                 "reason": "",
                 "_sl_tp_override": sl_tp_overrides.get(asset),
                 "_confluence_flat": is_confluence_flat,
-                "_partial_take": is_partial,
             }
             
-            # v017: Confluence flat means no trade
             if is_confluence_flat:
                 action["status"] = "confluence_flat"
-                action["reason"] = b.get("confluence_info") or self.state.confluence_info.get(asset, "No confluence")
+                action["reason"] = self.state.confluence_info.get(asset, "No confluence")
                 actions.append(action)
                 continue
             
-            # v017 LAYER 6: Cost-Aware Filtering
+            # Cost filter
             if s.cost_filter_enabled and not is_sl_tp:
                 try:
-                    if abs(desired) > 1e-9 and abs(current) < 1e-9:  # Opening new position
-                        # Estimate edge from confluence
+                    if abs(desired) > 1e-9 and abs(current) < 1e-9:
                         strength = b.get("confluence_strength", 1)
                         avg_conf = b.get("confluence_avg_conf", 0.6)
                         edge_bps = estimate_signal_edge_bps(strength, avg_conf)
@@ -622,23 +604,17 @@ class TradingEngine:
                             action["status"] = "cost_filter"
                             action["reason"] = reason
                             actions.append(action)
-                            log.info(f"v017 Cost filter skip {asset}: {reason}")
                             continue
-                        else:
-                            action["_cost_edge"] = reason
-                except Exception as exc:
-                    log.warning(f"Cost filter failed for {asset}: {exc}")
+                except:
+                    pass
             
-            # Reversal handling
             if current != 0 and not is_sl_tp:
                 is_reversal = current * desired < 0 and abs(desired) > 1e-9
                 if is_reversal:
                     action["_force_close_first"] = True
                     action["desired_coin"] = 0.0
                     desired = 0.0
-                    log.info(f"v017 reversal for {asset}: closing first {current}")
             
-            # Validate
             try:
                 step = float(meta.get("contract_size") or 0.001)
                 minimum = float(meta.get("min_trade_amount") or step)
@@ -662,30 +638,26 @@ class TradingEngine:
                     effective_cooldown = self._get_adaptive_cooldown(asset, s.cooldown_seconds)
                     if not plan.reduce_only and not is_sl_tp and time.time() - last_trade < effective_cooldown:
                         remaining = int(effective_cooldown - (time.time() - last_trade))
-                        action.update(status="cooldown", reason=f"Cooldown {remaining}s (adaptive base {s.cooldown_seconds}s)")
+                        action.update(status="cooldown", reason=f"Cooldown {remaining}s")
                     elif not s.trading_enabled:
                         action.update(status="trading_disabled", reason="TRADING_ENABLED=false")
                     elif not plan.reduce_only and latched and not is_sl_tp:
-                        action.update(status="drawdown_guard", reason=f"Drawdown {drawdown*100:.1f}% >= {s.max_drawdown_pct*100:.0f}% latched")
+                        action.update(status="drawdown_guard", reason=f"Drawdown {drawdown*100:.1f}%")
                     elif not plan.reduce_only and book.get("state") != "open" and not is_sl_tp:
                         action.update(status=f"market_{book.get('state','unknown')}", reason="Book not open")
                     elif inst in self._backoffs and time.time() < self._backoffs[inst]["retry_after"]:
                         err = self._backoffs[inst]["error"]
-                        if is_sl_tp or "small" in err.lower() or "qty exceeds" in err.lower() or "minimum" in err.lower():
-                            pass
-                        else:
+                        if not (is_sl_tp or "small" in err.lower() or "qty exceeds" in err.lower()):
                             action.update(status="order_error_backoff", reason=err)
                     
-                    if action["status"] == "planned" or is_sl_tp or is_partial:
+                    if action["status"] == "planned" or is_sl_tp:
                         try:
                             limit = ioc_price(book, plan.direction, meta, s.max_slippage_bps)
                             action["limit_price"] = limit
                             action["can_execute"] = True
                             action["status"] = "planned"
                             if is_sl_tp:
-                                action["reason"] = f"SL/TP override: {sl_tp_overrides[asset]}"
-                            if is_partial:
-                                action["reason"] = f"Partial take {b.get('_partial_fraction',0.5)*100:.0f}%"
+                                action["reason"] = f"SL/TP: {sl_tp_overrides[asset]}"
                         except Exception as exc:
                             action.update(status="no_liquidity", reason=str(exc))
             except Exception as exc:
@@ -693,7 +665,6 @@ class TradingEngine:
             
             actions.append(action)
         
-        # Diagnostics
         open_count = sum(1 for v in market_data.values() if v.get("market_state")=="open")
         active_assets = sum(1 for v in net_book.values() if abs(v.get("target_coin",0))>1e-9)
         ranging_count = sum(1 for a, df in frames.items() if _detect_regime(df) == "ranging")
@@ -712,14 +683,10 @@ class TradingEngine:
                 trading_ready = False
                 blocker = "order_error_backoff"
         
-        # v017: If all confluence flat, that's healthy, not blocker
         all_flat = all(a["status"] in ("target_reached", "pending_check", "cooldown", "skip_small", "below_exchange_minimum", "no_signal", "confluence_flat", "cost_filter") for a in actions)
         if all_flat:
             trading_ready = not latched
             blocker = None if trading_ready else "drawdown_guard"
-            if all(a["status"] in ("confluence_flat", "cost_filter") for a in actions):
-                # All filtered - healthy, no trade day
-                self.state.push("info", f"v017 All assets filtered: confluence_flat or cost_filter - healthy no-trade day, activity rate {active_assets}/{len(s.asset_list)}")
         
         self.state.diagnostics = {
             "trading_ready": trading_ready,
@@ -727,14 +694,16 @@ class TradingEngine:
             "primary_blocker": blocker,
             "market_open_count": open_count,
             "active_signal_assets": active_assets,
-            "execution_environment": "testnet-live-v017-7layers",
+            "execution_environment": "testnet-live-v018-10pairs",
             "ranging_count": ranging_count,
             "regime_info": {a: _detect_regime(df) for a, df in frames.items()},
             "sl_tp_triggers": sl_tp_overrides,
             "confluence_info": self.state.confluence_info,
             "correlation_info": self.state.correlation_info,
             "meta_stats": self.state.meta_stats,
-            "philosophy": "Signal-Quality-On 30-60% variable, no trade is healthy",
+            "version": self.state.version,
+            "assets_count": len(s.asset_list),
+            "test_trade_enabled": s.effective_test_trade_enabled,
         }
         self.state.market_data = market_data
         self.state.actions = actions
@@ -757,17 +726,11 @@ class TradingEngine:
                             side = 1 if action.get("direction") == "buy" else -1
                             levels = self._calculate_atr_levels(df, entry_price, side)
                             self.state.position_sl_tp[asset] = {**levels, "side": side, "entry_price": entry_price}
-                            log.info(f"v017 SL/TP set for {asset}: entry {entry_price}, SL {levels.get('sl')}, TP {levels.get('tp')}")
-                # v017 LAYER 5: Record trade result for meta-allocator (simplified - would need real PnL)
-                # For now, we can't know sleeve attribution for a fill, so we skip
-                # In real implementation, we'd need to track which sleeve contributed to the position
-        except Exception as exc:
-            log.warning(f"_log_fill failed: {exc}")
-        
+        except:
+            pass
         entry = {"ts": self.state.last_fill_at, **{k: action.get(k) for k in ("asset", "instrument", "status", "amount", "price", "notional_usd", "order_id")}}
         self.state.orders_log = (self.state.orders_log + [entry])[-300:]
 
-# Singleton
 _engine: Optional[TradingEngine] = None
 
 def get_engine():

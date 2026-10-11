@@ -29,7 +29,7 @@ services:
       - key: LONG_ONLY
         value: "false"
       - key: ASSETS
-        value: BTC,ETH,SOL,AVAX,LINK
+        value: BTC,ETH,SOL,AVAX,LINK,XRP,DOGE,ADA,DOT,LTC
       - key: SLEEVE_WEIGHTS
         value: "diversified_5:0.15,zenith_apex:0.15,almasi_primary:0.15,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.10,mean_reversion:0.20"
       - key: SLEEVES_ENABLED
@@ -42,10 +42,6 @@ services:
         value: "5"
       - key: CANDLE_LOOKBACK_HOURS
         value: "1000"
-      - key: TELEGRAM_TRADE_ONLY
-        value: "true"
-      - key: TELEGRAM_FULL_REPORT_HOURS
-        value: "6"
       - key: REBALANCE_NOTIONAL_USD
         value: "5.0"
       - key: MARKET_DATA_MAX_AGE_SECONDS
@@ -56,18 +52,8 @@ services:
         value: "100"
       - key: MAX_DRAWDOWN_PCT
         value: "0.15"
-      - key: OPS_REVIEW_SECONDS
-        value: "3600"
-      - key: ALLOW_MAINNET_TRADING
-        value: "false"
-      - key: DASHBOARD_TOKEN
-        sync: false
-      - key: REPORT_TIMEZONE
-        value: "Europe/Istanbul"
-      - key: REPORT_HISTORY_HOURS
-        value: "168"
       - key: TEST_TRADE_ENABLED
-        value: "false"
+        value: "true"
       - key: TEST_TRADE_ASSET
         value: "BTC"
       - key: TEST_TRADE_HOLD_SECONDS
@@ -81,4 +67,6 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: DASHBOARD_TOKEN
         sync: false

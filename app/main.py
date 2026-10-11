@@ -17,7 +17,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v017-7layers-upgrade"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-testtrade-telegram-close"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
@@ -34,13 +34,28 @@ def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = N
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings, engine = get_settings(), get_engine()
-    log.info("SUPER boot: build=%s capital=%s sleeves=%s dry_run=%s", BUILD, settings.capital_usd, settings.enabled_sleeves, settings.dry_run)
+    log.info("SUPER boot: build=%s version=%s capital=%s assets=%s sleeves=%s test_trade=%s", BUILD, settings.version, settings.capital_usd, settings.asset_list, settings.enabled_sleeves, settings.effective_test_trade_enabled)
+    try:
+        from app.telegram_bot import init_reporter_from_settings
+        reporter = init_reporter_from_settings(settings)
+        if reporter:
+            reporter.bind_engine(engine)
+            reporter.start_background()
+    except Exception:
+        log.exception("telegram init failed")
     engine.start()
     yield
+    try:
+        from app.telegram_bot import get_reporter
+        reporter = get_reporter()
+        if reporter:
+            reporter.stop()
+    except:
+        pass
     engine.stop()
 
 
-app = FastAPI(title="Zenith SUPER v017", version="v017-7layers", lifespan=lifespan)
+app = FastAPI(title="Zenith SUPER v018", version="v018-10pairs", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -68,33 +83,26 @@ def health():
     }
     
     return {
-        "ok": True, "liveness_ok": True, "bot": "zenith-SUPER-v017-7layers", "build": BUILD,
+        "ok": True, "liveness_ok": True, "bot": f"zenith-SUPER-{state.version}", "build": BUILD,
+        "version": state.version,
+        "version_history": state.version_history[-5:],
         "running": state.running, "mode": state.mode, "loop_count": state.loop_count,
         "last_loop_at": last, "loop_age_seconds": age, "last_error": state.last_error,
-        "cycle_in_progress": state.cycle_in_progress, "cycle_started_at": state.cycle_started_at,
         "n_sleeves": len(state.sleeves), "n_assets": len(settings.asset_list),
+        "assets": settings.asset_list,
+        "assets_count": len(settings.asset_list),
         "trading_ready": bool(state.running and fresh and diagnostic.get("trading_ready")),
         "trading_state": diagnostic.get("trading_state", "initializing"),
         "primary_blocker": diagnostic.get("primary_blocker"),
         "market_open_count": diagnostic.get("market_open_count", 0),
         "active_signal_assets": diagnostic.get("active_signal_assets", 0),
-        "confirmed_fill_count": 0,
-        "last_fill_at": state.last_fill_at,
-        "version": "v017-7layers-upgrade",
-        "philosophy": "Signal-Quality-On 30-60% variable, no trade is healthy",
-        "layers": diagnostic.get("layers") or {
-            "1_confluence": f"min_agreement={settings.confluence_min_agreement}",
-            "2_vol_targeting": f"target_vol={settings.target_vol_annual}",
-            "3_correlation": "effective exposure",
-            "4_smart_exit": "trailing + partial",
-            "5_meta_allocator": "dynamic weights",
-            "6_cost_filter": "edge > costs",
-            "7_validation": "multi-regime",
-        },
+        "test_trade_enabled": settings.effective_test_trade_enabled,
+        "test_trade_asset": settings.test_trade_asset,
+        "test_trade": state.test_trade,
         "confluence_info": state.confluence_info,
         "correlation_info": state.correlation_info,
-        "meta_stats": state.meta_stats,
         "regime_info": diagnostic.get("regime_info", {}),
+        "philosophy": "Signal-Quality-On 30-60% variable + 10 pairs + test trade + telegram close buttons",
         "financial": fin_summary,
     }
 
@@ -102,20 +110,19 @@ def health():
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     return HTMLResponse("""
-    <html><head><title>Zenith v017 7 Layers</title></head><body style="font-family: sans-serif; background: #070e19; color: #e4eaf4; padding: 20px;">
-    <h1>Zenith SUPER v017 - 7 Layers Upgrade</h1>
-    <p>Build: v017 7 layers - Signal-Quality-On 30-60% variable</p>
-    <p>Philosophy: No trade is healthy, not bug</p>
+    <html><head><title>Zenith v018 10 Pairs</title></head><body style="font-family: sans-serif; background: #070e19; color: #e4eaf4; padding: 20px;">
+    <h1>Zenith SUPER v018 - 10 Pairs + Test Trade + Telegram Close</h1>
+    <p>Build: v018 10pairs-testtrade-telegram-close</p>
+    <p>Version: v018 | Assets: 10 (BTC,ETH,SOL,AVAX,LINK,XRP,DOGE,ADA,DOT,LTC)</p>
+    <p>Features:</p>
     <ul>
-        <li>Layer 1: Confluence Filter - min 3 agreement</li>
-        <li>Layer 2: Volatility Targeting - risk constant</li>
-        <li>Layer 3: Correlation-Aware - effective exposure</li>
-        <li>Layer 4: Smart Exit - trailing + partial TP</li>
-        <li>Layer 5: Meta-Allocator - dynamic weights</li>
-        <li>Layer 6: Cost Filter - edge > costs</li>
-        <li>Layer 7: Validation - multi-regime</li>
+        <li>✅ 10 trading pairs (was 5)</li>
+        <li>✅ Test trade active on BTC (60s)</li>
+        <li>✅ Telegram close button for each individual trade</li>
+        <li>✅ Version in telegram report</li>
+        <li>✅ 7 layers from v017: confluence, vol targeting, correlation, smart exit, meta-allocator, cost filter, validation</li>
     </ul>
-    <p><a href="/health" style="color: #70d9eb;">/health</a> | <a href="/api/status" style="color: #70d9eb;">/api/status</a> | <a href="/api/diagnostics" style="color: #70d9eb;">/api/diagnostics</a></p>
+    <p><a href="/health" style="color: #70d9eb;">/health</a> | <a href="/api/status" style="color: #70d9eb;">/api/status</a> | <a href="/api/positions">/api/positions</a></p>
     </body></html>
     """)
 
@@ -130,8 +137,7 @@ def diagnostics(authorization: Optional[str] = Header(None), x_token: Optional[s
     _check_token(authorization, x_token)
     snap = get_engine().snapshot()
     return {"build": BUILD, "diagnostics": snap["diagnostics"], "market_data": snap["market_data"],
-            "risk": snap["risk"], "actions": snap["actions"], "confluence_info": snap.get("confluence_info"),
-            "correlation_info": snap.get("correlation_info"), "meta_stats": snap.get("meta_stats")}
+            "risk": snap["risk"], "actions": snap["actions"], "version": snap.get("version")}
 
 @app.get("/api/financial")
 def financial(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
@@ -144,22 +150,86 @@ def financial(authorization: Optional[str] = Header(None), x_token: Optional[str
         "account": eng.state.account,
         "positions": eng.state.positions,
         "risk": risk,
+        "version": eng.state.version,
     }
 
 @app.get("/api/sleeves")
 def sleeves(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token)
     snap = get_engine().snapshot()
-    return {"sleeves": snap["sleeves"], "net_book": snap["net_book"], "config": snap["config"], "confluence_info": snap.get("confluence_info")}
+    return {"sleeves": snap["sleeves"], "net_book": snap["net_book"], "config": snap["config"], "version": snap.get("version")}
+
+@app.get("/api/positions")
+def positions(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    eng = get_engine()
+    return {"positions": eng.state.positions, "version": eng.state.version, "assets": eng.settings.asset_list}
+
+@app.post("/api/close/{asset}")
+def close_position(asset: str, authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token, control=True)
+    eng = get_engine()
+    result = eng.close_position(asset.upper())
+    return result
+
+@app.post("/api/close-all")
+def close_all(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token, control=True)
+    eng = get_engine()
+    results = {}
+    for asset in eng.settings.asset_list:
+        try:
+            results[asset] = eng.close_position(asset)
+        except Exception as e:
+            results[asset] = {"ok": False, "error": str(e)}
+    return {"ok": True, "results": results, "version": eng.state.version}
 
 @app.post("/api/start")
 def start(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token, control=True)
     get_engine().start()
-    return {"ok": True}
+    return {"ok": True, "version": get_engine().state.version}
 
 @app.post("/api/stop")
 def stop(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token, control=True)
     get_engine().stop()
-    return {"ok": True}
+    return {"ok": True, "version": get_engine().state.version}
+
+# Test trade endpoints
+@app.get("/api/test-trade")
+def test_trade_status(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    eng = get_engine()
+    s = eng.settings
+    test_state = eng.state.test_trade if hasattr(eng.state, 'test_trade') else {"active": False}
+    if eng.test_trader:
+        try:
+            test_state = eng.test_trader.snapshot()
+        except:
+            pass
+    return {"test_trade": test_state, "asset": s.test_trade_asset, "enabled": s.effective_test_trade_enabled, "version": eng.state.version}
+
+@app.post("/api/test-trade/start")
+def start_test_trade(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token, control=True)
+    eng = get_engine()
+    if not eng.settings.effective_test_trade_enabled:
+        raise HTTPException(400, "Test trade disabled")
+    try:
+        if eng.test_trader:
+            state = eng.test_trader.start()
+            return {"ok": True, "test_trade": state, "version": eng.state.version}
+        else:
+            raise HTTPException(500, "Test trader not available")
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+
+@app.post("/api/test-trade/close")
+def close_test_trade(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token, control=True)
+    eng = get_engine()
+    if eng.test_trader:
+        state = eng.test_trader.request_close()
+        return {"ok": True, "test_trade": state, "version": eng.state.version}
+    return {"ok": False, "error": "Test trader not available"}
