@@ -516,7 +516,7 @@ class TradingEngine:
         
         # SL/TP + Smart exit
         sl_tp_overrides = {}
-        for asset in s.asset_list:
+        for asset in filtered_list:
             inst = s.instrument_for(asset)
             current_qty = inventory.get(inst, 0.0)
             if current_qty == 0:
@@ -551,7 +551,7 @@ class TradingEngine:
         drawdown = float(risk.get("drawdown_pct") or 0)
         
         actions = []
-        for asset in s.asset_list:
+        for asset in filtered_list:
             inst = s.instrument_for(asset)
             md = market_data.get(asset, {})
             book = md.get("book", {})
