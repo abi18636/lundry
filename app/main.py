@@ -24,7 +24,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED17-DOUBLE-REQ"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED18-TRIPLE-REQ"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
@@ -190,29 +190,26 @@ def debug_wallet(authorization: Optional[str] = Header(None), x_token: Optional[
     _check_token(authorization, x_token)
     eng = get_engine()
     try:
-        # Test double request
-        try:
-            raw1 = eng.client._request("GET", "/api/wallet", use_v5=False)
-            raw1_ok = True
-        except Exception as e:
-            raw1 = {"error": str(e)}
-            raw1_ok = False
-        try:
-            raw2 = eng.client._request("GET", "/api/wallet", use_v5=False)
-            raw2_ok = True
-        except Exception as e:
-            raw2 = {"error": str(e)}
-            raw2_ok = False
+        results = []
+        for i in range(5):
+            try:
+                raw = eng.client._request("GET", "/api/wallet", use_v5=False)
+                results.append({"i": i, "ok": True, "equity": raw.get("equity") if isinstance(raw, dict) else None})
+            except Exception as e:
+                import traceback
+                results.append({"i": i, "ok": False, "error": str(e), "tb": traceback.format_exc()[:500]})
+        
         try:
             parsed = eng.client.account_summary("USDT")
         except Exception as e:
             import traceback
             parsed = {"error": str(e), "tb": traceback.format_exc()[:500]}
         
-        return {"ok": True, "raw1_ok": raw1_ok, "raw1": raw1, "raw2_ok": raw2_ok, "raw2": raw2, "parsed": parsed, "version": eng.state.version, "build": BUILD}
+        return {"ok": True, "results": results, "parsed": parsed, "version": eng.state.version, "build": BUILD}
     except Exception as e:
         import traceback
         return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}
+
 
 
 
