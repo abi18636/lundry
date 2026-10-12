@@ -24,7 +24,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED18-TRIPLE-REQ"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED19-GLOBAL2-DEBUG"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
@@ -191,7 +191,7 @@ def debug_wallet(authorization: Optional[str] = Header(None), x_token: Optional[
     eng = get_engine()
     try:
         results = []
-        for i in range(5):
+        for i in range(3):
             try:
                 raw = eng.client._request("GET", "/api/wallet", use_v5=False)
                 results.append({"i": i, "ok": True, "equity": raw.get("equity") if isinstance(raw, dict) else None})
@@ -205,10 +205,17 @@ def debug_wallet(authorization: Optional[str] = Header(None), x_token: Optional[
             import traceback
             parsed = {"error": str(e), "tb": traceback.format_exc()[:500]}
         
-        return {"ok": True, "results": results, "parsed": parsed, "version": eng.state.version, "build": BUILD}
+        try:
+            from app.ariax import last_wallet_debug
+            debug_global = last_wallet_debug
+        except Exception as e:
+            debug_global = {"error": str(e)}
+        
+        return {"ok": True, "results": results, "parsed": parsed, "last_wallet_debug": debug_global, "version": eng.state.version, "build": BUILD}
     except Exception as e:
         import traceback
         return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}
+
 
 
 

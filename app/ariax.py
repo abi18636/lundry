@@ -9,6 +9,8 @@ import httpx
 import pandas as pd
 
 log = logging.getLogger("ariax")
+last_wallet_debug = {}
+
 
 class AriaXAPIError(Exception):
     def __init__(self, path: str, code, msg: str):
@@ -176,11 +178,78 @@ class AriaXClient:
             return pd.DataFrame()
 
     def account_summary(self, currency: str = "USDT") -> dict:
-        # ULTRA SIMPLE - direct parsing, no complex try/except that hides errors
+        global last_wallet_debug
+        last_wallet_debug = {"called": True}
         try:
-            data = self._request("GET", "/api/wallet", use_v5=False)
+            try:
+                data = self._request("GET", "/api/wallet", use_v5=False)
+                last_wallet_debug["request_ok"] = True
+                last_wallet_debug["data_type"] = str(type(data))
+                last_wallet_debug["data_keys"] = list(data.keys()) if isinstance(data, dict) else None
+                last_wallet_debug["equity_raw"] = data.get("equity") if isinstance(data, dict) else None
+            except Exception as e:
+                last_wallet_debug["request_exception"] = str(e)
+                import traceback
+                last_wallet_debug["request_tb"] = traceback.format_exc()[:1000]
+                return {currency: {"equity": 0, "available": 0, "balance": 0}}
+            
+            try:
+                if not isinstance(data, dict):
+                    last_wallet_debug["not_dict"] = True
+                    return {currency: {"equity": 0, "available": 0, "balance": 0}}
+                
+                equity = data.get("equity")
+                last_wallet_debug["equity"] = equity
+                if equity is not None:
+                    try:
+                        eq = float(equity)
+                        last_wallet_debug["eq_float"] = eq
+                        last_wallet_debug["eq_gt_0"] = eq > 0
+                        if eq > 0:
+                            free = float(data.get("free_margin") or 0)
+                            last_wallet_debug["free"] = free
+                            fut_bal = 0
+                            try:
+                                fb = data.get("futures", {}).get("balances", {})
+                                if isinstance(fb, dict):
+                                    fut_bal = float(fb.get("USDT") or 0)
+                            except Exception as e:
+                                last_wallet_debug["fut_bal_exception"] = str(e)
+                            last_wallet_debug["fut_bal"] = fut_bal
+                            available = free if free > 0 else fut_bal if fut_bal > 0 else eq
+                            balance = fut_bal if fut_bal > 0 else eq
+                            result = {currency: {"equity": eq, "available": available, "balance": balance}}
+                            last_wallet_debug["returning"] = "equity"
+                            last_wallet_debug["result"] = result
+                            return result
+                    except Exception as e:
+                        last_wallet_debug["equity_parse_exception"] = str(e)
+                        import traceback
+                        last_wallet_debug["equity_parse_tb"] = traceback.format_exc()[:1000]
+                
+                # Fallback futures
+                try:
+                    fb = data.get("futures", {}).get("balances", {})
+                    if isinstance(fb, dict):
+                        fut = float(fb.get("USDT") or 0)
+                        last_wallet_debug["fut_fallback"] = fut
+                        if fut > 0:
+                            last_wallet_debug["returning"] = "fut_fallback"
+                            return {currency: {"equity": fut, "available": fut, "balance": fut}}
+                except Exception as e:
+                    last_wallet_debug["fut_exception"] = str(e)
+                
+                last_wallet_debug["returning"] = "zero"
+                return {currency: {"equity": 0, "available": 0, "balance": 0}}
+            except Exception as e:
+                last_wallet_debug["parse_exception"] = str(e)
+                import traceback
+                last_wallet_debug["parse_tb"] = traceback.format_exc()[:1000]
+                return {currency: {"equity": 0, "available": 0, "balance": 0}}
         except Exception as e:
-            log.warning(f"account_summary _request failed: {e}")
+            last_wallet_debug["outer_exception"] = str(e)
+            import traceback
+            last_wallet_debug["outer_tb"] = traceback.format_exc()[:1000]
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
         
         # Direct parsing - raw has ok, balances, futures, equity, free_margin
