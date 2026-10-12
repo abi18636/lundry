@@ -24,7 +24,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED24-FILE-DEBUG2"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED25-CWD-DEBUG"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
@@ -243,13 +243,17 @@ def debug_tmp(authorization: Optional[str] = Header(None), x_token: Optional[str
 
 
 
+
+
+
+
 @app.get("/api/debug/wallet")
 def debug_wallet(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token)
     eng = get_engine()
     try:
         results = []
-        for i in range(3):
+        for i in range(2):
             try:
                 raw = eng.client._request("GET", "/api/wallet", use_v5=False)
                 results.append({"i": i, "ok": True, "equity": raw.get("equity") if isinstance(raw, dict) else None})
@@ -263,17 +267,26 @@ def debug_wallet(authorization: Optional[str] = Header(None), x_token: Optional[
             import traceback
             parsed = {"error": str(e), "tb": traceback.format_exc()[:500]}
         
-        # Read file debug
         file_debug = {}
+        files_checked = []
         try:
             import json, os
-            if os.path.exists("/tmp/wallet_debug.json"):
-                with open("/tmp/wallet_debug.json", "r") as f:
-                    file_debug = json.load(f)
+            for p in ["/tmp/wallet_debug.json", "wallet_debug.json", "app/wallet_debug.json"]:
+                files_checked.append(p)
+                if os.path.exists(p):
+                    with open(p, "r") as f:
+                        file_debug[p] = json.load(f)
+                else:
+                    file_debug[p] = "not exists"
+            files_checked.append(f"cwd={os.getcwd()} list={os.listdir('.')[:10]}")
+            if os.path.exists("app"):
+                files_checked.append(f"app list={os.listdir('app')[:10]}")
         except Exception as e:
-            file_debug = {"error": str(e)}
+            file_debug["error"] = str(e)
+            import traceback
+            file_debug["tb"] = traceback.format_exc()[:500]
         
-        return {"ok": True, "results": results, "parsed": parsed, "file_debug": file_debug, "version": eng.state.version, "build": BUILD}
+        return {"ok": True, "results": results, "parsed": parsed, "file_debug": file_debug, "files_checked": files_checked, "version": eng.state.version, "build": BUILD}
     except Exception as e:
         import traceback
         return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}
@@ -301,11 +314,14 @@ def debug_positions(authorization: Optional[str] = Header(None), x_token: Option
         file_debug = {}
         try:
             import json, os
-            if os.path.exists("/tmp/positions_debug.json"):
-                with open("/tmp/positions_debug.json", "r") as f:
-                    file_debug = json.load(f)
+            for p in ["/tmp/positions_debug.json", "positions_debug.json", "app/positions_debug.json"]:
+                if os.path.exists(p):
+                    with open(p, "r") as f:
+                        file_debug[p] = json.load(f)
+                else:
+                    file_debug[p] = "not exists"
         except Exception as e:
-            file_debug = {"error": str(e)}
+            file_debug["error"] = str(e)
         
         return {"ok": True, "raw_ok": raw_ok, "raw_len": raw_len, "raw": raw, "parsed": parsed, "file_debug": file_debug, "state_positions": eng.state.positions, "version": eng.state.version, "build": BUILD}
     except Exception as e:

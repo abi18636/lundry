@@ -178,7 +178,9 @@ class AriaXClient:
             return pd.DataFrame()
 
     def account_summary(self, currency: str = "USDT") -> dict:
-        debug_path = "/tmp/wallet_debug.json"
+        debug_path = "wallet_debug.json"
+        debug_path2 = "/tmp/wallet_debug.json"
+        debug_path3 = "app/wallet_debug.json"
         debug_info = {"called_at": time.time(), "pid": os.getpid()}
         try:
             data = self._request("GET", "/api/wallet", use_v5=False)
@@ -191,8 +193,34 @@ class AriaXClient:
             import traceback
             debug_info["request_tb"] = traceback.format_exc()[:1000]
             try:
+                try:
+                try:
                 with open(debug_path, "w") as f:
                     json.dump(debug_info, f, default=str)
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
             except Exception as e2:
                 debug_info["file_write_error"] = str(e2)
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
@@ -200,8 +228,34 @@ class AriaXClient:
         try:
             if not isinstance(data, dict):
                 debug_info["not_dict"] = True
+                try:
+                try:
                 with open(debug_path, "w") as f:
                     json.dump(debug_info, f, default=str)
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
                 return {currency: {"equity": 0, "available": 0, "balance": 0}}
             
             equity = data.get("equity")
@@ -228,8 +282,34 @@ class AriaXClient:
                         result = {currency: {"equity": eq, "available": available, "balance": balance}}
                         debug_info["returning"] = "equity"
                         debug_info["result"] = result
-                        with open(debug_path, "w") as f:
-                            json.dump(debug_info, f, default=str)
+                        try:
+                try:
+                with open(debug_path, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
                         return result
                     else:
                         debug_info["eq_not_gt_0"] = True
@@ -248,29 +328,109 @@ class AriaXClient:
                         debug_info["returning"] = "fut_fallback"
                         result = {currency: {"equity": fut, "available": fut, "balance": fut}}
                         debug_info["result"] = result
-                        with open(debug_path, "w") as f:
-                            json.dump(debug_info, f, default=str)
+                        try:
+                try:
+                with open(debug_path, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
                         return result
             except Exception as e:
                 debug_info["fut_exception"] = str(e)
             
             debug_info["returning"] = "zero"
-            with open(debug_path, "w") as f:
-                json.dump(debug_info, f, default=str)
+            try:
+                try:
+                with open(debug_path, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
         except Exception as e:
             debug_info["outer_exception"] = str(e)
             import traceback
             debug_info["outer_tb"] = traceback.format_exc()[:1000]
             try:
+                try:
+                try:
                 with open(debug_path, "w") as f:
                     json.dump(debug_info, f, default=str)
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
             except:
                 pass
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
 
     def positions(self, currency: str = "USDT") -> List[dict]:
-        debug_path = "/tmp/positions_debug.json"
+        debug_path = "positions_debug.json"
+        debug_path2 = "/tmp/positions_debug.json"
+        debug_path3 = "app/positions_debug.json"
         debug_info = {"called_at": time.time(), "pid": os.getpid()}
         try:
             data = self._request("GET", "/api/positions", use_v5=False)
@@ -287,8 +447,34 @@ class AriaXClient:
             import traceback
             debug_info["request_tb"] = traceback.format_exc()[:1000]
             try:
+                try:
+                try:
                 with open(debug_path, "w") as f:
                     json.dump(debug_info, f, default=str)
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
             except:
                 pass
             return []
@@ -301,8 +487,34 @@ class AriaXClient:
                 raw_positions = data
             else:
                 debug_info["unknown_format"] = str(data)[:500]
+                try:
+                try:
                 with open(debug_path, "w") as f:
                     json.dump(debug_info, f, default=str)
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
                 return []
             
             debug_info["raw_count"] = len(raw_positions)
@@ -349,16 +561,68 @@ class AriaXClient:
             debug_info["normalized_count"] = len(normalized)
             if normalized:
                 debug_info["first_normalized"] = normalized[0]
-            with open(debug_path, "w") as f:
-                json.dump(debug_info, f, default=str)
+            try:
+                try:
+                with open(debug_path, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
             return normalized
         except Exception as e:
             debug_info["outer_exception"] = str(e)
             import traceback
             debug_info["outer_tb"] = traceback.format_exc()[:1000]
             try:
+                try:
+                try:
                 with open(debug_path, "w") as f:
                     json.dump(debug_info, f, default=str)
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            except Exception as e:
+                debug_info["file_write_error"] = str(e)
+            try:
+                with open(debug_path2, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
+            try:
+                with open(debug_path3, "w") as f:
+                    json.dump(debug_info, f, default=str)
+            except:
+                pass
             except:
                 pass
             return []
