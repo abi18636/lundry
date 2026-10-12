@@ -250,20 +250,61 @@ class AriaXClient:
     def positions(self, currency: str = "USDT") -> List[dict]:
         try:
             data = self._request("GET", "/api/positions", use_v5=False)
-            result = []
-            if data.get("ok"):
-                for p in data.get("data", []):
-                    result.append({
-                        "instrument_name": p.get("symbol", "").replace("USD", "USDT") if p.get("symbol","").endswith("USD") else p.get("symbol"),
-                        "size": float(p.get("size") or 0),
-                        "size_currency": float(p.get("size_currency") or p.get("qty") or 0),
-                        "direction": p.get("direction") or ("buy" if float(p.get("size") or 0)>0 else "sell"),
-                        "average_price": float(p.get("avg_price") or p.get("entry_price") or 0),
-                        "mark_price": float(p.get("mark_price") or 0),
-                        "floating_profit_loss": float(p.get("upnl") or p.get("pnl") or 0),
+            raw_positions = []
+            if isinstance(data, dict) and "data" in data:
+                raw_positions = data.get("data", [])
+            elif isinstance(data, list):
+                raw_positions = data
+            else:
+                return []
+            
+            # Normalize to expected format for engine and dashboard
+            normalized = []
+            for p in raw_positions:
+                try:
+                    # Real format: symbol: ADAUSD, size: -27, entry: 0.2423, mark: 0.2429, upnl: -0.0172, lev: 5
+                    symbol = p.get("symbol") or p.get("instrument_name") or ""
+                    # Convert ADAUSD -> ADAUSDT for consistency, but keep original too
+                    asset = symbol.replace("USD", "").replace("USDT", "")
+                    if symbol.endswith("USD") and not symbol.endswith("USDT"):
+                        instrument = asset + "USDT"
+                    else:
+                        instrument = symbol
+                    
+                    size = float(p.get("size") or 0)
+                    entry = float(p.get("entry") or p.get("average_price") or 0)
+                    mark = float(p.get("mark") or p.get("mark_price") or 0)
+                    upnl = float(p.get("upnl") or p.get("total_profit_loss") or p.get("floating_profit_loss") or 0)
+                    lev = p.get("lev") or p.get("leverage") or 5
+                    
+                    direction = "sell" if size < 0 else "buy" if size > 0 else ""
+                    
+                    normalized.append({
+                        "instrument_name": instrument,
+                        "symbol": symbol,
+                        "size": size,
+                        "size_currency": size,
+                        "direction": direction,
+                        "average_price": entry,
+                        "mark_price": mark,
+                        "total_profit_loss": upnl,
+                        "floating_profit_loss": upnl,
+                        "leverage": lev,
+                        "entry": entry,
+                        "mark": mark,
+                        "upnl": upnl,
+                        "margin": p.get("margin"),
+                        "liq": p.get("liq"),
+                        "sl": p.get("sl"),
+                        "tp": p.get("tp"),
                     })
-            return result
-        except:
+                except Exception as e:
+                    # Keep raw if parsing fails
+                    normalized.append(p)
+            return normalized
+        except Exception as e:
+            import logging
+            logging.getLogger("ariax").warning(f"positions parse failed: {e}")
             return []
 
     def open_orders(self, currency: str = "USDT") -> List[dict]:
