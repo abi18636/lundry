@@ -180,68 +180,81 @@ class AriaXClient:
             data = self._request("GET", "/api/wallet", use_v5=False)
             log.info(f"Wallet raw keys={list(data.keys()) if isinstance(data, dict) else type(data)} preview={str(data)[:600]}")
             
-            # Unwrap if wrapped in ok/data
             if isinstance(data, dict) and "data" in data and isinstance(data["data"], dict):
                 inner = data["data"]
                 if "balances" in inner or "equity" in inner or "futures" in inner:
                     data = inner
             
             if isinstance(data, dict):
-                # New format: has balances, futures, equity, free_margin, locks, spot
-                # Example: {"ok": true, "balances": {"USDT": 19598}, "futures": {"balances": {"USDT": 385}}, "equity": 19999, "free_margin": 385}
-                spot_bal = 0
-                fut_bal = 0
+                spot_bal = 0.0
+                fut_bal = 0.0
                 try:
                     if "balances" in data and isinstance(data["balances"], dict):
                         spot_bal = float(data["balances"].get("USDT") or data["balances"].get("USDC") or 0)
+                        log.info(f"Wallet spot_bal from balances: {spot_bal}")
                     if "spot" in data and isinstance(data["spot"], dict):
                         sb = data["spot"].get("balances", {})
                         if isinstance(sb, dict):
-                            spot_bal = float(sb.get("USDT") or spot_bal)
+                            sb_val = float(sb.get("USDT") or 0)
+                            if sb_val > 0:
+                                spot_bal = sb_val
+                            log.info(f"Wallet spot_bal from spot.balances: {spot_bal}")
                     if "futures" in data and isinstance(data["futures"], dict):
                         fb = data["futures"].get("balances", {})
                         if isinstance(fb, dict):
                             fut_bal = float(fb.get("USDT") or fb.get("USDC") or 0)
                         elif isinstance(fb, (int, float)):
                             fut_bal = float(fb)
+                        log.info(f"Wallet fut_bal: {fut_bal}")
                 except Exception as e:
                     log.warning(f"Wallet balances parse failed: {e}")
+                    import traceback
+                    log.warning(traceback.format_exc()[:500])
                 
                 try:
-                    equity = float(data.get("equity") or 0)
-                    free = float(data.get("free_margin") or data.get("free") or 0)
-                    # If equity present, use it
+                    equity_raw = data.get("equity")
+                    free_raw = data.get("free_margin") or data.get("free")
+                    log.info(f"Wallet equity_raw={equity_raw} free_raw={free_raw} spot_bal={spot_bal} fut_bal={fut_bal}")
+                    equity = float(equity_raw or 0)
+                    free = float(free_raw or 0)
+                    log.info(f"Wallet equity={equity} free={free}")
                     if equity > 0:
                         available = free if free > 0 else fut_bal if fut_bal > 0 else equity
                         balance = fut_bal if fut_bal > 0 else spot_bal if spot_bal > 0 else equity
-                        return {
+                        result = {
                             currency: {
                                 "equity": float(equity),
                                 "available": float(available),
                                 "balance": float(balance),
                             }
                         }
-                    # If no equity but futures balance present
+                        log.info(f"Wallet returning equity result: {result}")
+                        return result
                     if fut_bal > 0:
-                        return {
+                        result = {
                             currency: {
                                 "equity": float(fut_bal),
                                 "available": float(fut_bal),
                                 "balance": float(fut_bal),
                             }
                         }
+                        log.info(f"Wallet returning fut_bal result: {result}")
+                        return result
                     if spot_bal > 0:
-                        return {
+                        result = {
                             currency: {
                                 "equity": float(spot_bal),
                                 "available": float(spot_bal),
                                 "balance": float(spot_bal),
                             }
                         }
+                        log.info(f"Wallet returning spot_bal result: {result}")
+                        return result
                 except Exception as e:
                     log.warning(f"Wallet equity parse failed: {e}")
+                    import traceback
+                    log.warning(traceback.format_exc()[:500])
                 
-                # Check direct USDT key
                 for key in ("USDT", currency, "USDC"):
                     d = data.get(key)
                     if isinstance(d, dict) and d:
@@ -265,6 +278,11 @@ class AriaXClient:
         except Exception as e:
             log.warning(f"account_summary exception: {e}")
             import traceback
+            log.warning(traceback.format_exc()[:1000])
+            return {currency: {"equity": 0, "available": 0, "balance": 0}}
+        except Exception as e:
+            log.warning(f"account_summary exception: {e}")
+            import traceback
             log.warning(traceback.format_exc()[:500])
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
 
@@ -283,6 +301,93 @@ class AriaXClient:
             else:
                 log.warning(f"Positions unknown format: {str(data)[:500]}")
                 return []
+            
+            log.info(f"Positions raw count={len(raw_positions)} first={str(raw_positions[0])[:500] if raw_positions else 'none'}")
+            
+            normalized = []
+            for p in raw_positions:
+                try:
+                    symbol = p.get("symbol") or p.get("instrument_name") or p.get("instrument") or ""
+                    asset = symbol.replace("USDT", "").replace("USDC", "").replace("USD", "").replace("-", "").replace("/", "")
+                    if symbol.endswith("USDT"):
+                        instrument = symbol
+                    elif symbol.endswith("USD") and not symbol.endswith("USDT"):
+                        instrument = asset + "USDT"
+                    else:
+                        instrument = symbol if symbol else asset + "USDT"
+                        if not instrument.endswith("USDT"):
+                            instrument = asset + "USDT"
+                    
+                    size = float(p.get("size") or p.get("qty") or p.get("size_currency") or 0)
+                    
+                    entry = 0
+                    for key in ("entry", "average_price", "avg_price", "entry_price", "price", "open_price"):
+                        val = p.get(key)
+                        if val is not None:
+                            try:
+                                f = float(val)
+                                if f != 0:
+                                    entry = f
+                                    break
+                            except:
+                                pass
+                    
+                    mark = 0
+                    for key in ("mark", "mark_price", "last_price", "close", "current_price"):
+                        val = p.get(key)
+                        if val is not None:
+                            try:
+                                f = float(val)
+                                if f != 0:
+                                    mark = f
+                                    break
+                            except:
+                                pass
+                    
+                    upnl = 0
+                    for key in ("upnl", "total_profit_loss", "floating_profit_loss", "pnl", "unrealized_pnl", "profit"):
+                        val = p.get(key)
+                        if val is not None:
+                            try:
+                                upnl = float(val)
+                                break
+                            except:
+                                pass
+                    
+                    lev = p.get("lev") or p.get("leverage") or 5
+                    direction = "sell" if size < 0 else "buy" if size > 0 else str(p.get("direction", ""))
+                    
+                    normalized.append({
+                        "instrument_name": instrument,
+                        "symbol": symbol,
+                        "size": size,
+                        "size_currency": size,
+                        "direction": direction,
+                        "average_price": entry,
+                        "mark_price": mark,
+                        "total_profit_loss": upnl,
+                        "floating_profit_loss": upnl,
+                        "leverage": lev,
+                        "entry": entry,
+                        "mark": mark,
+                        "upnl": upnl,
+                        "margin": p.get("margin"),
+                        "liq": p.get("liq") or p.get("liq_price"),
+                        "sl": p.get("sl"),
+                        "tp": p.get("tp"),
+                    })
+                except Exception as e:
+                    log.warning(f"Position normalize failed for {p}: {e}")
+                    import traceback
+                    log.warning(traceback.format_exc()[:500])
+                    normalized.append(p)
+            
+            log.info(f"Positions normalized {len(normalized)} from {len(raw_positions)} raw, first={normalized[0] if normalized else 'none'}")
+            return normalized
+        except Exception as e:
+            import traceback
+            log.warning(f"positions exception: {e} {traceback.format_exc()[:1000]}")
+            return []
             
             normalized = []
             for p in raw_positions:
