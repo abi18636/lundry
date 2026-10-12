@@ -90,7 +90,7 @@ def ioc_price(book: dict, direction: str, meta: dict, max_slippage_bps: float = 
             raise RuntimeError("no bid liquidity")
 
 
-def plan_rebalance(current: float, desired: float, price: float, step: float, minimum: float, rebalance_threshold_usd: float = 5.0) -> PlanResult:
+def plan_rebalance(current: float, desired: float, price: float, step: float, minimum: float, rebalance_threshold_usd: float = 1.0) -> PlanResult:
     """
     v016 FIX: Proper rebalance planning without 50% hack
     - Floor amount with step

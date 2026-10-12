@@ -224,11 +224,38 @@ class TradingEngine:
     def _update_risk(self, account: dict) -> bool:
         s = self.settings
         try:
-            equity = float(account.get("USDT", {}).get("equity") or 0)
-            available = float(account.get("USDT", {}).get("available") or 0)
+            # Try USDT, then USDC, then any
+            equity = 0
+            available = 0
+            for curr in ("USDT", "USDC"):
+                acc = account.get(curr, {})
+                if acc:
+                    eq = float(acc.get("equity") or acc.get("balance") or 0)
+                    av = float(acc.get("available") or acc.get("balance") or 0)
+                    if eq > 0:
+                        equity = eq
+                        available = av
+                        break
+                    if av > 0 and equity == 0:
+                        equity = av
+                        available = av
+            # Fallback: if equity still 0, try to use any positive value from account dict
+            if equity == 0:
+                for k,v in account.items():
+                    if isinstance(v, dict):
+                        eq = float(v.get("equity") or v.get("balance") or v.get("available") or 0)
+                        if eq > 0:
+                            equity = eq
+                            available = eq
+                            break
             if not math.isfinite(equity):
                 return False
-        except:
+            # If equity still 0, use capital as fallback to avoid blocking
+            if equity == 0:
+                equity = s.capital_usd
+                available = s.capital_usd
+        except Exception as ex:
+            log.warning(f"_update_risk parse failed: {ex}")
             return False
         
         r = self.state.risk

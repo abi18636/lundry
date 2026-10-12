@@ -250,13 +250,94 @@ class AriaXClient:
     def positions(self, currency: str = "USDT") -> List[dict]:
         try:
             data = self._request("GET", "/api/positions", use_v5=False)
+            try:
+                log.info(f"Positions raw preview: {str(data)[:800]}")
+            except:
+                pass
+            
             raw_positions = []
             if isinstance(data, dict) and "data" in data:
                 raw_positions = data.get("data", [])
             elif isinstance(data, list):
                 raw_positions = data
+            elif isinstance(data, dict) and "positions" in data:
+                raw_positions = data.get("positions", [])
             else:
+                log.warning(f"Positions unknown format: {str(data)[:500]}")
                 return []
+            
+            normalized = []
+            for p in raw_positions:
+                try:
+                    symbol = p.get("symbol") or p.get("instrument_name") or p.get("instrument") or ""
+                    asset = symbol.replace("USD", "").replace("USDT", "").replace("USDC", "").replace("-", "").replace("/", "")
+                    if symbol.endswith("USD") and not symbol.endswith("USDT"):
+                        instrument = asset + "USDT"
+                    else:
+                        instrument = symbol if symbol else asset + "USDT"
+                    
+                    size = float(p.get("size") or p.get("qty") or p.get("size_currency") or 0)
+                    entry = 0
+                    for key in ("entry", "average_price", "avg_price", "entry_price", "price", "open_price"):
+                        val = p.get(key)
+                        if val is not None:
+                            try:
+                                entry = float(val)
+                                if entry != 0:
+                                    break
+                            except:
+                                pass
+                    mark = 0
+                    for key in ("mark", "mark_price", "last_price", "close", "current_price"):
+                        val = p.get(key)
+                        if val is not None:
+                            try:
+                                mark = float(val)
+                                if mark != 0:
+                                    break
+                            except:
+                                pass
+                    upnl = 0
+                    for key in ("upnl", "total_profit_loss", "floating_profit_loss", "pnl", "unrealized_pnl", "profit"):
+                        val = p.get(key)
+                        if val is not None:
+                            try:
+                                upnl = float(val)
+                                break
+                            except:
+                                pass
+                    lev = p.get("lev") or p.get("leverage") or 5
+                    
+                    direction = "sell" if size < 0 else "buy" if size > 0 else str(p.get("direction", ""))
+                    
+                    normalized.append({
+                        "instrument_name": instrument,
+                        "symbol": symbol,
+                        "size": size,
+                        "size_currency": size,
+                        "direction": direction,
+                        "average_price": entry,
+                        "mark_price": mark,
+                        "total_profit_loss": upnl,
+                        "floating_profit_loss": upnl,
+                        "leverage": lev,
+                        "entry": entry,
+                        "mark": mark,
+                        "upnl": upnl,
+                        "margin": p.get("margin"),
+                        "liq": p.get("liq") or p.get("liq_price"),
+                        "sl": p.get("sl"),
+                        "tp": p.get("tp"),
+                    })
+                except Exception as e:
+                    log.warning(f"Position normalize failed for {p}: {e}")
+                    normalized.append(p)
+            log.info(f"Positions normalized {len(normalized)} from {len(raw_positions)} raw, first={normalized[0] if normalized else 'none'}")
+            return normalized
+        except Exception as e:
+            import traceback
+            log.warning(f"positions exception: {e} {traceback.format_exc()[:500]}")
+            return []
             
             # Normalize to expected format for engine and dashboard
             normalized = []

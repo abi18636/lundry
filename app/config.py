@@ -1,5 +1,5 @@
 """
-v018 FIXED8-TRADING-FULL - ABSOLUTE FORCE 10 pairs, 7 sleeves
+v018 FIXED6 - ABSOLUTE FORCE 10 pairs, 7 sleeves
 Fixes Render dashboard env var with 25 assets
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     loop_seconds: int = 60
     max_notional_usd: float = 200.0
     min_notional_usd: float = 5.0
-    rebalance_notional_usd: float = 5.0
+    rebalance_notional_usd: float = 1.0
     max_drawdown_pct: float = 0.15
     max_spread_bps: float = 200.0
     max_slippage_bps: float = 100.0
@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
     telegram_bot_username: str = "TestTraid_bot"
     report_timezone: str = "Europe/Istanbul"
-    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED8-TRADING-FULL"
+    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED9-POSITIONS-FULL"
 
     @property
     def effective_capital(self) -> float:
