@@ -24,7 +24,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED13-VERBOSE-FULL"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED14-STEP-DEBUG"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
@@ -191,27 +191,47 @@ def debug_wallet(authorization: Optional[str] = Header(None), x_token: Optional[
     eng = get_engine()
     try:
         raw = eng.client._request("GET", "/api/wallet", use_v5=False)
-        debug_info = {}
-        debug_info["raw_keys"] = list(raw.keys()) if isinstance(raw, dict) else str(type(raw))
-        debug_info["has_balances"] = "balances" in raw if isinstance(raw, dict) else False
-        debug_info["has_futures"] = "futures" in raw if isinstance(raw, dict) else False
-        debug_info["equity_raw"] = raw.get("equity") if isinstance(raw, dict) else None
-        debug_info["free_margin_raw"] = raw.get("free_margin") if isinstance(raw, dict) else None
-        if isinstance(raw, dict) and "balances" in raw and isinstance(raw["balances"], dict):
-            debug_info["balances_USDT"] = raw["balances"].get("USDT")
-        if isinstance(raw, dict) and "futures" in raw and isinstance(raw["futures"], dict):
-            fb = raw["futures"].get("balances", {})
-            debug_info["futures_balances"] = fb
-            debug_info["futures_USDT"] = fb.get("USDT") if isinstance(fb, dict) else str(fb)[:200]
+        steps = {}
         try:
+            steps["raw_keys"] = list(raw.keys()) if isinstance(raw, dict) else str(type(raw))
+            steps["equity_raw"] = raw.get("equity") if isinstance(raw, dict) else None
+            steps["free_raw"] = raw.get("free_margin") if isinstance(raw, dict) else None
+            # Step 1: spot_bal
+            spot_bal = 0.0
+            if isinstance(raw, dict) and "balances" in raw and isinstance(raw["balances"], dict):
+                spot_bal = float(raw["balances"].get("USDT") or 0)
+            steps["spot_bal"] = spot_bal
+            # Step 2: fut_bal
+            fut_bal = 0.0
+            if isinstance(raw, dict) and "futures" in raw and isinstance(raw["futures"], dict):
+                fb = raw["futures"].get("balances", {})
+                if isinstance(fb, dict):
+                    fut_bal = float(fb.get("USDT") or 0)
+            steps["fut_bal"] = fut_bal
+            # Step 3: equity
+            equity = float(raw.get("equity") or 0) if isinstance(raw, dict) else 0
+            free = float(raw.get("free_margin") or 0) if isinstance(raw, dict) else 0
+            steps["equity"] = equity
+            steps["free"] = free
+            steps["equity_gt_0"] = equity > 0
+            # Step 4: try return logic
+            if equity > 0:
+                available = free if free > 0 else fut_bal if fut_bal > 0 else equity
+                balance = fut_bal if fut_bal > 0 else spot_bal if spot_bal > 0 else equity
+                steps["would_return"] = {"equity": equity, "available": available, "balance": balance}
+            # Actual parsed
             parsed = eng.client.account_summary("USDT")
+            steps["parsed"] = parsed
         except Exception as e:
             import traceback
-            parsed = {"error": str(e), "tb": traceback.format_exc()[:500]}
-        return {"ok": True, "raw": raw, "debug_info": debug_info, "parsed": parsed, "version": eng.state.version, "build": BUILD}
+            steps["exception"] = str(e)
+            steps["tb"] = traceback.format_exc()[:1000]
+        
+        return {"ok": True, "raw": raw, "steps": steps, "parsed": eng.client.account_summary("USDT"), "version": eng.state.version, "build": BUILD}
     except Exception as e:
         import traceback
         return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}
+
 
 @app.get("/api/debug/positions")
 def debug_positions(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
