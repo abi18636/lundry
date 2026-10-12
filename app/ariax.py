@@ -1,5 +1,5 @@
 """
-AriaX client - FIXED11 CLEAN - robust wallet and positions parsing
+AriaX client - FIXED16 ULTRA SIMPLE - direct parsing
 """
 from __future__ import annotations
 import time
@@ -9,8 +9,6 @@ import httpx
 import pandas as pd
 
 log = logging.getLogger("ariax")
-last_wallet_debug = {}
-last_positions_debug = {}
 
 class AriaXAPIError(Exception):
     def __init__(self, path: str, code, msg: str):
@@ -178,129 +176,62 @@ class AriaXClient:
             return pd.DataFrame()
 
     def account_summary(self, currency: str = "USDT") -> dict:
-        global last_wallet_debug
-        last_wallet_debug = {}
+        # ULTRA SIMPLE - direct parsing, no complex try/except that hides errors
         try:
             data = self._request("GET", "/api/wallet", use_v5=False)
-            last_wallet_debug["raw_keys"] = list(data.keys()) if isinstance(data, dict) else str(type(data))
-            last_wallet_debug["raw_preview"] = str(data)[:500]
+        except Exception as e:
+            log.warning(f"account_summary _request failed: {e}")
+            return {currency: {"equity": 0, "available": 0, "balance": 0}}
+        
+        # Direct parsing - raw has ok, balances, futures, equity, free_margin
+        try:
+            if not isinstance(data, dict):
+                return {currency: {"equity": 0, "available": 0, "balance": 0}}
             
-            if isinstance(data, dict) and "data" in data and isinstance(data["data"], dict):
-                inner = data["data"]
-                if "balances" in inner or "equity" in inner or "futures" in inner:
-                    data = inner
-                    last_wallet_debug["unwrapped"] = True
-            
-            if isinstance(data, dict):
-                spot_bal = 0.0
-                fut_bal = 0.0
+            # Get equity directly - this is the most reliable
+            equity = data.get("equity")
+            if equity is not None:
                 try:
-                    if "balances" in data and isinstance(data["balances"], dict):
-                        spot_bal = float(data["balances"].get("USDT") or data["balances"].get("USDC") or 0)
-                    if "spot" in data and isinstance(data["spot"], dict):
-                        sb = data["spot"].get("balances", {})
-                        if isinstance(sb, dict):
-                            sb_val = float(sb.get("USDT") or 0)
-                            if sb_val > 0:
-                                spot_bal = sb_val
-                    if "futures" in data and isinstance(data["futures"], dict):
-                        fb = data["futures"].get("balances", {})
-                        if isinstance(fb, dict):
-                            fut_bal = float(fb.get("USDT") or fb.get("USDC") or 0)
-                        elif isinstance(fb, (int, float)):
-                            fut_bal = float(fb)
-                    last_wallet_debug["spot_bal"] = spot_bal
-                    last_wallet_debug["fut_bal"] = fut_bal
-                except Exception as e:
-                    last_wallet_debug["balances_exception"] = str(e)
-                    import traceback
-                    last_wallet_debug["balances_tb"] = traceback.format_exc()[:500]
-                
-                try:
-                    equity_raw = data.get("equity")
-                    free_raw = data.get("free_margin") or data.get("free")
-                    last_wallet_debug["equity_raw"] = equity_raw
-                    last_wallet_debug["free_raw"] = free_raw
-                    equity = float(equity_raw or 0)
-                    free = float(free_raw or 0)
-                    last_wallet_debug["equity"] = equity
-                    last_wallet_debug["free"] = free
-                    last_wallet_debug["equity_gt_0"] = equity > 0
-                    if equity > 0:
-                        available = free if free > 0 else fut_bal if fut_bal > 0 else equity
-                        balance = fut_bal if fut_bal > 0 else spot_bal if spot_bal > 0 else equity
-                        result = {
-                            currency: {
-                                "equity": float(equity),
-                                "available": float(available),
-                                "balance": float(balance),
-                            }
-                        }
-                        last_wallet_debug["returning"] = "equity"
-                        last_wallet_debug["result"] = result
-                        return result
-                    if fut_bal > 0:
-                        result = {
-                            currency: {
-                                "equity": float(fut_bal),
-                                "available": float(fut_bal),
-                                "balance": float(fut_bal),
-                            }
-                        }
-                        last_wallet_debug["returning"] = "fut_bal"
-                        last_wallet_debug["result"] = result
-                        return result
-                    if spot_bal > 0:
-                        result = {
-                            currency: {
-                                "equity": float(spot_bal),
-                                "available": float(spot_bal),
-                                "balance": float(spot_bal),
-                            }
-                        }
-                        last_wallet_debug["returning"] = "spot_bal"
-                        last_wallet_debug["result"] = result
-                        return result
-                    last_wallet_debug["no_positive"] = True
-                except Exception as e:
-                    last_wallet_debug["equity_exception"] = str(e)
-                    import traceback
-                    last_wallet_debug["equity_tb"] = traceback.format_exc()[:1000]
-                
-                for key in ("USDT", currency, "USDC"):
-                    d = data.get(key)
-                    if isinstance(d, dict) and d:
+                    eq = float(equity)
+                    if eq > 0:
+                        free = float(data.get("free_margin") or 0)
+                        # Get futures balance
+                        fut_bal = 0
                         try:
-                            eq = float(d.get("equity") or d.get("balance") or 0)
-                            if eq > 0:
-                                last_wallet_debug["returning"] = f"direct_{key}"
-                                return {
-                                    currency: {
-                                        "equity": eq,
-                                        "available": float(d.get("available") or d.get("free") or d.get("balance") or eq),
-                                        "balance": float(d.get("balance") or eq),
-                                    }
-                                }
+                            fb = data.get("futures", {}).get("balances", {})
+                            if isinstance(fb, dict):
+                                fut_bal = float(fb.get("USDT") or 0)
                         except:
                             pass
-                    elif isinstance(d, (int, float)) and float(d) > 0:
-                        last_wallet_debug["returning"] = f"direct_{key}_float"
-                        return {currency: {"equity": float(d), "available": float(d), "balance": float(d)}}
+                        available = free if free > 0 else fut_bal if fut_bal > 0 else eq
+                        balance = fut_bal if fut_bal > 0 else eq
+                        return {currency: {"equity": eq, "available": available, "balance": balance}}
+                except Exception as e:
+                    log.warning(f"Equity parse failed: {e}, equity={equity}")
             
-            last_wallet_debug["returning"] = "zero"
+            # Fallback: futures balance
+            try:
+                fb = data.get("futures", {}).get("balances", {})
+                if isinstance(fb, dict):
+                    fut = float(fb.get("USDT") or 0)
+                    if fut > 0:
+                        return {currency: {"equity": fut, "available": fut, "balance": fut}}
+            except:
+                pass
+            
+            # Fallback: spot balances
+            try:
+                sb = data.get("balances", {})
+                if isinstance(sb, dict):
+                    spot = float(sb.get("USDT") or 0)
+                    if spot > 0:
+                        return {currency: {"equity": spot, "available": spot, "balance": spot}}
+            except:
+                pass
+            
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
         except Exception as e:
-            last_wallet_debug["outer_exception"] = str(e)
-            import traceback
-            last_wallet_debug["outer_tb"] = traceback.format_exc()[:1000]
-            return {currency: {"equity": 0, "available": 0, "balance": 0}}
-        except Exception as e:
-            log.warning(f"account_summary exception: {e}")
-            import traceback
-            log.warning(traceback.format_exc()[:1000])
-            return {currency: {"equity": 0, "available": 0, "balance": 0}}
-        except Exception as e:
-            log.warning(f"account_summary exception: {e}")
+            log.warning(f"account_summary parse failed: {e}")
             import traceback
             log.warning(traceback.format_exc()[:500])
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
@@ -308,73 +239,34 @@ class AriaXClient:
     def positions(self, currency: str = "USDT") -> List[dict]:
         try:
             data = self._request("GET", "/api/positions", use_v5=False)
-            log.info(f"Positions raw type={type(data)} preview={str(data)[:800]}")
-            
+        except Exception as e:
+            log.warning(f"positions _request failed: {e}")
+            return []
+        
+        try:
             raw_positions = []
             if isinstance(data, dict) and "data" in data:
                 raw_positions = data.get("data", [])
             elif isinstance(data, list):
                 raw_positions = data
-            elif isinstance(data, dict) and "positions" in data:
-                raw_positions = data.get("positions", [])
             else:
-                log.warning(f"Positions unknown format: {str(data)[:500]}")
                 return []
             
-            log.info(f"Positions raw count={len(raw_positions)} first={str(raw_positions[0])[:500] if raw_positions else 'none'}")
-            
             normalized = []
             for p in raw_positions:
                 try:
-                    symbol = p.get("symbol") or p.get("instrument_name") or p.get("instrument") or ""
-                    asset = symbol.replace("USDT", "").replace("USDC", "").replace("USD", "").replace("-", "").replace("/", "")
-                    if symbol.endswith("USDT"):
-                        instrument = symbol
-                    elif symbol.endswith("USD") and not symbol.endswith("USDT"):
+                    symbol = p.get("symbol") or ""
+                    asset = symbol.replace("USDT", "").replace("USD", "")
+                    instrument = asset + "USDT" if symbol.endswith("USD") and not symbol.endswith("USDT") else symbol
+                    if not instrument.endswith("USDT"):
                         instrument = asset + "USDT"
-                    else:
-                        instrument = symbol if symbol else asset + "USDT"
-                        if not instrument.endswith("USDT"):
-                            instrument = asset + "USDT"
                     
-                    size = float(p.get("size") or p.get("qty") or p.get("size_currency") or 0)
-                    
-                    entry = 0
-                    for key in ("entry", "average_price", "avg_price", "entry_price", "price", "open_price"):
-                        val = p.get(key)
-                        if val is not None:
-                            try:
-                                f = float(val)
-                                if f != 0:
-                                    entry = f
-                                    break
-                            except:
-                                pass
-                    
-                    mark = 0
-                    for key in ("mark", "mark_price", "last_price", "close", "current_price"):
-                        val = p.get(key)
-                        if val is not None:
-                            try:
-                                f = float(val)
-                                if f != 0:
-                                    mark = f
-                                    break
-                            except:
-                                pass
-                    
-                    upnl = 0
-                    for key in ("upnl", "total_profit_loss", "floating_profit_loss", "pnl", "unrealized_pnl", "profit"):
-                        val = p.get(key)
-                        if val is not None:
-                            try:
-                                upnl = float(val)
-                                break
-                            except:
-                                pass
-                    
-                    lev = p.get("lev") or p.get("leverage") or 5
-                    direction = "sell" if size < 0 else "buy" if size > 0 else str(p.get("direction", ""))
+                    size = float(p.get("size") or 0)
+                    entry = float(p.get("entry") or 0)
+                    mark = float(p.get("mark") or 0)
+                    upnl = float(p.get("upnl") or 0)
+                    lev = p.get("lev") or 5
+                    direction = "sell" if size < 0 else "buy" if size > 0 else ""
                     
                     normalized.append({
                         "instrument_name": instrument,
@@ -391,107 +283,19 @@ class AriaXClient:
                         "mark": mark,
                         "upnl": upnl,
                         "margin": p.get("margin"),
-                        "liq": p.get("liq") or p.get("liq_price"),
+                        "liq": p.get("liq"),
                         "sl": p.get("sl"),
                         "tp": p.get("tp"),
                     })
                 except Exception as e:
-                    log.warning(f"Position normalize failed for {p}: {e}")
-                    import traceback
-                    log.warning(traceback.format_exc()[:500])
-                    normalized.append(p)
+                    log.warning(f"Position parse failed: {e}, p={p}")
+                    continue
             
-            log.info(f"Positions normalized {len(normalized)} from {len(raw_positions)} raw, first={normalized[0] if normalized else 'none'}")
             return normalized
         except Exception as e:
+            log.warning(f"positions parse failed: {e}")
             import traceback
-            log.warning(f"positions exception: {e} {traceback.format_exc()[:1000]}")
-            return []
-            
-            normalized = []
-            for p in raw_positions:
-                try:
-                    symbol = p.get("symbol") or p.get("instrument_name") or p.get("instrument") or ""
-                    # Clean asset name: ADAUSD -> ADA, BTCUSDT -> BTC
-                    asset = symbol.replace("USDT", "").replace("USDC", "").replace("USD", "").replace("-", "").replace("/", "")
-                    # Handle case where symbol is already ADAUSDT
-                    if symbol.endswith("USDT"):
-                        instrument = symbol
-                    elif symbol.endswith("USD") and not symbol.endswith("USDT"):
-                        instrument = asset + "USDT"
-                    else:
-                        instrument = symbol if symbol else asset + "USDT"
-                        if not instrument.endswith("USDT"):
-                            instrument = asset + "USDT"
-                    
-                    size = float(p.get("size") or p.get("qty") or p.get("size_currency") or 0)
-                    
-                    entry = 0
-                    for key in ("entry", "average_price", "avg_price", "entry_price", "price", "open_price"):
-                        val = p.get(key)
-                        if val is not None:
-                            try:
-                                f = float(val)
-                                if f != 0:
-                                    entry = f
-                                    break
-                            except:
-                                pass
-                    
-                    mark = 0
-                    for key in ("mark", "mark_price", "last_price", "close", "current_price"):
-                        val = p.get(key)
-                        if val is not None:
-                            try:
-                                f = float(val)
-                                if f != 0:
-                                    mark = f
-                                    break
-                            except:
-                                pass
-                    
-                    upnl = 0
-                    for key in ("upnl", "total_profit_loss", "floating_profit_loss", "pnl", "unrealized_pnl", "profit"):
-                        val = p.get(key)
-                        if val is not None:
-                            try:
-                                upnl = float(val)
-                                break
-                            except:
-                                pass
-                    
-                    lev = p.get("lev") or p.get("leverage") or 5
-                    
-                    direction = "sell" if size < 0 else "buy" if size > 0 else str(p.get("direction", ""))
-                    
-                    normalized.append({
-                        "instrument_name": instrument,
-                        "symbol": symbol,
-                        "size": size,
-                        "size_currency": size,
-                        "direction": direction,
-                        "average_price": entry,
-                        "mark_price": mark,
-                        "total_profit_loss": upnl,
-                        "floating_profit_loss": upnl,
-                        "leverage": lev,
-                        "entry": entry,
-                        "mark": mark,
-                        "upnl": upnl,
-                        "margin": p.get("margin"),
-                        "liq": p.get("liq") or p.get("liq_price"),
-                        "sl": p.get("sl"),
-                        "tp": p.get("tp"),
-                    })
-                except Exception as e:
-                    log.warning(f"Position normalize failed for {p}: {e}")
-                    normalized.append(p)
-            
-            log.info(f"Positions normalized {len(normalized)} from {len(raw_positions)} raw, first={normalized[0] if normalized else 'none'}")
-            return normalized
-        except Exception as e:
-            import traceback
-            log.warning(f"positions exception: {e} {traceback.format_exc()[:500]}")
+            log.warning(traceback.format_exc()[:500])
             return []
 
     def open_orders(self, currency: str = "USDT") -> List[dict]:
