@@ -1,5 +1,5 @@
 """
-AriaX client - FIXED24 FILE DEBUG with default=str
+AriaX client - FIXED26 FILE DEBUG at start
 """
 from __future__ import annotations
 import time
@@ -178,303 +178,102 @@ class AriaXClient:
             return pd.DataFrame()
 
     def account_summary(self, currency: str = "USDT") -> dict:
-        debug_path = "wallet_debug.json"
-        debug_path2 = "/tmp/wallet_debug.json"
-        debug_path3 = "app/wallet_debug.json"
-        debug_info = {"called_at": time.time(), "pid": os.getpid()}
+        # Write file at very start to test if file write works in this method
+        try:
+            with open("/tmp/wallet_debug_start.json", "w") as f:
+                f.write(f"called at {time.time()} pid {os.getpid()}")
+        except Exception as e:
+            pass
+        
         try:
             data = self._request("GET", "/api/wallet", use_v5=False)
-            debug_info["request_ok"] = True
-            debug_info["data_keys"] = list(data.keys()) if isinstance(data, dict) else str(type(data))
-            debug_info["equity_raw"] = data.get("equity") if isinstance(data, dict) else None
-            debug_info["equity_type"] = str(type(data.get("equity"))) if isinstance(data, dict) else None
         except Exception as e:
-            debug_info["request_exception"] = str(e)
-            import traceback
-            debug_info["request_tb"] = traceback.format_exc()[:1000]
             try:
-                try:
-                try:
-                with open(debug_path, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
+                with open("/tmp/wallet_debug.json", "w") as f:
+                    f.write(f"request failed: {e}")
             except:
                 pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            except Exception as e2:
-                debug_info["file_write_error"] = str(e2)
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
         
         try:
             if not isinstance(data, dict):
-                debug_info["not_dict"] = True
                 try:
-                try:
-                with open(debug_path, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
+                    with open("/tmp/wallet_debug.json", "w") as f:
+                        f.write(f"not dict: {type(data)}")
+                except:
+                    pass
                 return {currency: {"equity": 0, "available": 0, "balance": 0}}
             
             equity = data.get("equity")
-            debug_info["equity"] = equity
-            debug_info["equity_is_none"] = equity is None
             if equity is not None:
                 try:
                     eq = float(equity)
-                    debug_info["eq_float"] = eq
-                    debug_info["eq_gt_0"] = eq > 0
                     if eq > 0:
                         free = float(data.get("free_margin") or 0)
-                        debug_info["free"] = free
                         fut_bal = 0
                         try:
                             fb = data.get("futures", {}).get("balances", {})
                             if isinstance(fb, dict):
                                 fut_bal = float(fb.get("USDT") or 0)
-                        except Exception as e:
-                            debug_info["fut_bal_exception"] = str(e)
-                        debug_info["fut_bal"] = fut_bal
+                        except:
+                            pass
                         available = free if free > 0 else fut_bal if fut_bal > 0 else eq
                         balance = fut_bal if fut_bal > 0 else eq
                         result = {currency: {"equity": eq, "available": available, "balance": balance}}
-                        debug_info["returning"] = "equity"
-                        debug_info["result"] = result
                         try:
-                try:
-                with open(debug_path, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
+                            with open("/tmp/wallet_debug.json", "w") as f:
+                                f.write(f"SUCCESS equity={eq} available={available} balance={balance} raw_equity={equity}")
+                        except:
+                            pass
                         return result
-                    else:
-                        debug_info["eq_not_gt_0"] = True
                 except Exception as e:
-                    debug_info["equity_parse_exception"] = str(e)
-                    import traceback
-                    debug_info["equity_parse_tb"] = traceback.format_exc()[:1000]
+                    try:
+                        with open("/tmp/wallet_debug.json", "w") as f:
+                            f.write(f"equity parse failed: {e} equity={equity}")
+                    except:
+                        pass
             
-            # Fallback futures
             try:
                 fb = data.get("futures", {}).get("balances", {})
                 if isinstance(fb, dict):
                     fut = float(fb.get("USDT") or 0)
-                    debug_info["fut_fallback"] = fut
                     if fut > 0:
-                        debug_info["returning"] = "fut_fallback"
-                        result = {currency: {"equity": fut, "available": fut, "balance": fut}}
-                        debug_info["result"] = result
                         try:
-                try:
-                with open(debug_path, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
+                            with open("/tmp/wallet_debug.json", "w") as f:
+                                f.write(f"fut fallback: {fut}")
+                        except:
+                            pass
+                        return {currency: {"equity": fut, "available": fut, "balance": fut}}
             except:
                 pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-                        return result
-            except Exception as e:
-                debug_info["fut_exception"] = str(e)
             
-            debug_info["returning"] = "zero"
             try:
-                try:
-                with open(debug_path, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
+                with open("/tmp/wallet_debug.json", "w") as f:
+                    f.write(f"zero return: data keys={list(data.keys())} equity={data.get('equity')}")
             except:
                 pass
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
         except Exception as e:
-            debug_info["outer_exception"] = str(e)
-            import traceback
-            debug_info["outer_tb"] = traceback.format_exc()[:1000]
             try:
-                try:
-                try:
-                with open(debug_path, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
+                with open("/tmp/wallet_debug.json", "w") as f:
+                    f.write(f"outer exception: {e}")
             except:
                 pass
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
 
     def positions(self, currency: str = "USDT") -> List[dict]:
-        debug_path = "positions_debug.json"
-        debug_path2 = "/tmp/positions_debug.json"
-        debug_path3 = "app/positions_debug.json"
-        debug_info = {"called_at": time.time(), "pid": os.getpid()}
+        try:
+            with open("/tmp/positions_debug_start.json", "w") as f:
+                f.write(f"called at {time.time()}")
+        except:
+            pass
+        
         try:
             data = self._request("GET", "/api/positions", use_v5=False)
-            debug_info["request_ok"] = True
-            debug_info["data_type"] = str(type(data))
-            if isinstance(data, dict):
-                debug_info["data_keys"] = list(data.keys())
-                if "data" in data and isinstance(data["data"], list):
-                    debug_info["data_len"] = len(data["data"])
-                    if data["data"]:
-                        debug_info["first"] = data["data"][0]
         except Exception as e:
-            debug_info["request_exception"] = str(e)
-            import traceback
-            debug_info["request_tb"] = traceback.format_exc()[:1000]
             try:
-                try:
-                try:
-                with open(debug_path, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
+                with open("/tmp/positions_debug.json", "w") as f:
+                    f.write(f"request failed: {e}")
             except:
                 pass
             return []
@@ -486,38 +285,12 @@ class AriaXClient:
             elif isinstance(data, list):
                 raw_positions = data
             else:
-                debug_info["unknown_format"] = str(data)[:500]
                 try:
-                try:
-                with open(debug_path, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
+                    with open("/tmp/positions_debug.json", "w") as f:
+                        f.write(f"unknown format: {str(data)[:500]}")
+                except:
+                    pass
                 return []
-            
-            debug_info["raw_count"] = len(raw_positions)
             
             normalized = []
             for p in raw_positions:
@@ -555,74 +328,18 @@ class AriaXClient:
                         "tp": p.get("tp"),
                     })
                 except Exception as e:
-                    debug_info["pos_parse_exception"] = str(e)
                     continue
             
-            debug_info["normalized_count"] = len(normalized)
-            if normalized:
-                debug_info["first_normalized"] = normalized[0]
             try:
-                try:
-                with open(debug_path, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
+                with open("/tmp/positions_debug.json", "w") as f:
+                    f.write(f"SUCCESS count={len(normalized)} first={normalized[0] if normalized else 'none'}")
             except:
                 pass
             return normalized
         except Exception as e:
-            debug_info["outer_exception"] = str(e)
-            import traceback
-            debug_info["outer_tb"] = traceback.format_exc()[:1000]
             try:
-                try:
-                try:
-                with open(debug_path, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            except Exception as e:
-                debug_info["file_write_error"] = str(e)
-            try:
-                with open(debug_path2, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
-            try:
-                with open(debug_path3, "w") as f:
-                    json.dump(debug_info, f, default=str)
-            except:
-                pass
+                with open("/tmp/positions_debug.json", "w") as f:
+                    f.write(f"outer exception: {e}")
             except:
                 pass
             return []
