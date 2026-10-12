@@ -1,17 +1,16 @@
 """
-AriaX client - FIXED16 ULTRA SIMPLE - direct parsing
+AriaX client - FIXED22 FILE DEBUG
 """
 from __future__ import annotations
 import time
 import logging
+import json
+import os
 from typing import List, Optional, Dict
 import httpx
 import pandas as pd
 
 log = logging.getLogger("ariax")
-last_wallet_debug = []
-
-
 
 class AriaXAPIError(Exception):
     def __init__(self, path: str, code, msg: str):
@@ -179,212 +178,114 @@ class AriaXClient:
             return pd.DataFrame()
 
     def account_summary(self, currency: str = "USDT") -> dict:
-        global last_wallet_debug
-        debug_entry = {"called": True, "timestamp": __import__("time").time()}
+        debug_path = "/tmp/wallet_debug.json"
+        debug_info = {"called_at": time.time()}
         try:
-            try:
-                data = self._request("GET", "/api/wallet", use_v5=False)
-                debug_entry["request_ok"] = True
-                debug_entry["data_type"] = str(type(data))
-                debug_entry["data_keys"] = list(data.keys()) if isinstance(data, dict) else None
-                debug_entry["equity_raw"] = data.get("equity") if isinstance(data, dict) else None
-            except Exception as e:
-                debug_entry["request_exception"] = str(e)
-                import traceback
-                debug_entry["request_tb"] = traceback.format_exc()[:1000]
-                last_wallet_debug.append(debug_entry)
-                last_wallet_debug = last_wallet_debug[-10:]
-                return {currency: {"equity": 0, "available": 0, "balance": 0}}
-            
-            try:
-                if not isinstance(data, dict):
-                    debug_entry["not_dict"] = True
-                    last_wallet_debug.append(debug_entry)
-                    last_wallet_debug = last_wallet_debug[-10:]
-                    return {currency: {"equity": 0, "available": 0, "balance": 0}}
-                
-                equity = data.get("equity")
-                debug_entry["equity"] = equity
-                if equity is not None:
-                    try:
-                        eq = float(equity)
-                        debug_entry["eq_float"] = eq
-                        debug_entry["eq_gt_0"] = eq > 0
-                        if eq > 0:
-                            free = float(data.get("free_margin") or 0)
-                            debug_entry["free"] = free
-                            fut_bal = 0
-                            try:
-                                fb = data.get("futures", {}).get("balances", {})
-                                if isinstance(fb, dict):
-                                    fut_bal = float(fb.get("USDT") or 0)
-                            except Exception as e:
-                                debug_entry["fut_bal_exception"] = str(e)
-                            debug_entry["fut_bal"] = fut_bal
-                            available = free if free > 0 else fut_bal if fut_bal > 0 else eq
-                            balance = fut_bal if fut_bal > 0 else eq
-                            result = {currency: {"equity": eq, "available": available, "balance": balance}}
-                            debug_entry["returning"] = "equity"
-                            debug_entry["result"] = result
-                            last_wallet_debug.append(debug_entry)
-                            last_wallet_debug = last_wallet_debug[-10:]
-                            return result
-                    except Exception as e:
-                        debug_entry["equity_parse_exception"] = str(e)
-                        import traceback
-                        debug_entry["equity_parse_tb"] = traceback.format_exc()[:1000]
-                
-                try:
-                    fb = data.get("futures", {}).get("balances", {})
-                    if isinstance(fb, dict):
-                        fut = float(fb.get("USDT") or 0)
-                        debug_entry["fut_fallback"] = fut
-                        if fut > 0:
-                            debug_entry["returning"] = "fut_fallback"
-                            result = {currency: {"equity": fut, "available": fut, "balance": fut}}
-                            debug_entry["result"] = result
-                            last_wallet_debug.append(debug_entry)
-                            last_wallet_debug = last_wallet_debug[-10:]
-                            return result
-                except Exception as e:
-                    debug_entry["fut_exception"] = str(e)
-                
-                debug_entry["returning"] = "zero"
-                last_wallet_debug.append(debug_entry)
-                last_wallet_debug = last_wallet_debug[-10:]
-                return {currency: {"equity": 0, "available": 0, "balance": 0}}
-            except Exception as e:
-                debug_entry["parse_exception"] = str(e)
-                import traceback
-                debug_entry["parse_tb"] = traceback.format_exc()[:1000]
-                last_wallet_debug.append(debug_entry)
-                last_wallet_debug = last_wallet_debug[-10:]
-                return {currency: {"equity": 0, "available": 0, "balance": 0}}
+            data = self._request("GET", "/api/wallet", use_v5=False)
+            debug_info["request_ok"] = True
+            debug_info["data_keys"] = list(data.keys()) if isinstance(data, dict) else str(type(data))
+            debug_info["equity_raw"] = data.get("equity") if isinstance(data, dict) else None
         except Exception as e:
-            debug_entry["outer_exception"] = str(e)
+            debug_info["request_exception"] = str(e)
             import traceback
-            debug_entry["outer_tb"] = traceback.format_exc()[:1000]
-            last_wallet_debug.append(debug_entry)
-            last_wallet_debug = last_wallet_debug[-10:]
-            return {currency: {"equity": 0, "available": 0, "balance": 0}}
-            
+            debug_info["request_tb"] = traceback.format_exc()[:1000]
             try:
-                if not isinstance(data, dict):
-                    last_wallet_debug["not_dict"] = True
-                    return {currency: {"equity": 0, "available": 0, "balance": 0}}
-                
-                equity = data.get("equity")
-                last_wallet_debug["equity"] = equity
-                if equity is not None:
-                    try:
-                        eq = float(equity)
-                        last_wallet_debug["eq_float"] = eq
-                        last_wallet_debug["eq_gt_0"] = eq > 0
-                        if eq > 0:
-                            free = float(data.get("free_margin") or 0)
-                            last_wallet_debug["free"] = free
-                            fut_bal = 0
-                            try:
-                                fb = data.get("futures", {}).get("balances", {})
-                                if isinstance(fb, dict):
-                                    fut_bal = float(fb.get("USDT") or 0)
-                            except Exception as e:
-                                last_wallet_debug["fut_bal_exception"] = str(e)
-                            last_wallet_debug["fut_bal"] = fut_bal
-                            available = free if free > 0 else fut_bal if fut_bal > 0 else eq
-                            balance = fut_bal if fut_bal > 0 else eq
-                            result = {currency: {"equity": eq, "available": available, "balance": balance}}
-                            last_wallet_debug["returning"] = "equity"
-                            last_wallet_debug["result"] = result
-                            return result
-                    except Exception as e:
-                        last_wallet_debug["equity_parse_exception"] = str(e)
-                        import traceback
-                        last_wallet_debug["equity_parse_tb"] = traceback.format_exc()[:1000]
-                
-                # Fallback futures
-                try:
-                    fb = data.get("futures", {}).get("balances", {})
-                    if isinstance(fb, dict):
-                        fut = float(fb.get("USDT") or 0)
-                        last_wallet_debug["fut_fallback"] = fut
-                        if fut > 0:
-                            last_wallet_debug["returning"] = "fut_fallback"
-                            return {currency: {"equity": fut, "available": fut, "balance": fut}}
-                except Exception as e:
-                    last_wallet_debug["fut_exception"] = str(e)
-                
-                last_wallet_debug["returning"] = "zero"
-                return {currency: {"equity": 0, "available": 0, "balance": 0}}
-            except Exception as e:
-                last_wallet_debug["parse_exception"] = str(e)
-                import traceback
-                last_wallet_debug["parse_tb"] = traceback.format_exc()[:1000]
-                return {currency: {"equity": 0, "available": 0, "balance": 0}}
-        except Exception as e:
-            last_wallet_debug["outer_exception"] = str(e)
-            import traceback
-            last_wallet_debug["outer_tb"] = traceback.format_exc()[:1000]
+                with open(debug_path, "w") as f:
+                    json.dump(debug_info, f)
+            except:
+                pass
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
         
-        # Direct parsing - raw has ok, balances, futures, equity, free_margin
         try:
             if not isinstance(data, dict):
+                debug_info["not_dict"] = True
+                with open(debug_path, "w") as f:
+                    json.dump(debug_info, f)
                 return {currency: {"equity": 0, "available": 0, "balance": 0}}
             
-            # Get equity directly - this is the most reliable
             equity = data.get("equity")
+            debug_info["equity"] = equity
             if equity is not None:
                 try:
                     eq = float(equity)
+                    debug_info["eq_float"] = eq
                     if eq > 0:
                         free = float(data.get("free_margin") or 0)
-                        # Get futures balance
+                        debug_info["free"] = free
                         fut_bal = 0
                         try:
                             fb = data.get("futures", {}).get("balances", {})
                             if isinstance(fb, dict):
                                 fut_bal = float(fb.get("USDT") or 0)
-                        except:
-                            pass
+                        except Exception as e:
+                            debug_info["fut_bal_exception"] = str(e)
+                        debug_info["fut_bal"] = fut_bal
                         available = free if free > 0 else fut_bal if fut_bal > 0 else eq
                         balance = fut_bal if fut_bal > 0 else eq
-                        return {currency: {"equity": eq, "available": available, "balance": balance}}
+                        result = {currency: {"equity": eq, "available": available, "balance": balance}}
+                        debug_info["returning"] = "equity"
+                        debug_info["result"] = result
+                        with open(debug_path, "w") as f:
+                            json.dump(debug_info, f)
+                        return result
                 except Exception as e:
-                    log.warning(f"Equity parse failed: {e}, equity={equity}")
+                    debug_info["equity_parse_exception"] = str(e)
+                    import traceback
+                    debug_info["equity_parse_tb"] = traceback.format_exc()[:1000]
             
-            # Fallback: futures balance
+            # Fallback futures
             try:
                 fb = data.get("futures", {}).get("balances", {})
                 if isinstance(fb, dict):
                     fut = float(fb.get("USDT") or 0)
+                    debug_info["fut_fallback"] = fut
                     if fut > 0:
-                        return {currency: {"equity": fut, "available": fut, "balance": fut}}
-            except:
-                pass
+                        debug_info["returning"] = "fut_fallback"
+                        result = {currency: {"equity": fut, "available": fut, "balance": fut}}
+                        debug_info["result"] = result
+                        with open(debug_path, "w") as f:
+                            json.dump(debug_info, f)
+                        return result
+            except Exception as e:
+                debug_info["fut_exception"] = str(e)
             
-            # Fallback: spot balances
-            try:
-                sb = data.get("balances", {})
-                if isinstance(sb, dict):
-                    spot = float(sb.get("USDT") or 0)
-                    if spot > 0:
-                        return {currency: {"equity": spot, "available": spot, "balance": spot}}
-            except:
-                pass
-            
+            debug_info["returning"] = "zero"
+            with open(debug_path, "w") as f:
+                json.dump(debug_info, f)
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
         except Exception as e:
-            log.warning(f"account_summary parse failed: {e}")
+            debug_info["outer_exception"] = str(e)
             import traceback
-            log.warning(traceback.format_exc()[:500])
+            debug_info["outer_tb"] = traceback.format_exc()[:1000]
+            try:
+                with open(debug_path, "w") as f:
+                    json.dump(debug_info, f)
+            except:
+                pass
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
 
     def positions(self, currency: str = "USDT") -> List[dict]:
+        debug_path = "/tmp/positions_debug.json"
+        debug_info = {"called_at": time.time()}
         try:
             data = self._request("GET", "/api/positions", use_v5=False)
+            debug_info["request_ok"] = True
+            debug_info["data_type"] = str(type(data))
+            if isinstance(data, dict):
+                debug_info["data_keys"] = list(data.keys())
+                if "data" in data and isinstance(data["data"], list):
+                    debug_info["data_len"] = len(data["data"])
+                    if data["data"]:
+                        debug_info["first"] = data["data"][0]
         except Exception as e:
-            log.warning(f"positions _request failed: {e}")
+            debug_info["request_exception"] = str(e)
+            import traceback
+            debug_info["request_tb"] = traceback.format_exc()[:1000]
+            try:
+                with open(debug_path, "w") as f:
+                    json.dump(debug_info, f)
+            except:
+                pass
             return []
         
         try:
@@ -394,7 +295,12 @@ class AriaXClient:
             elif isinstance(data, list):
                 raw_positions = data
             else:
+                debug_info["unknown_format"] = str(data)[:500]
+                with open(debug_path, "w") as f:
+                    json.dump(debug_info, f)
                 return []
+            
+            debug_info["raw_count"] = len(raw_positions)
             
             normalized = []
             for p in raw_positions:
@@ -432,14 +338,24 @@ class AriaXClient:
                         "tp": p.get("tp"),
                     })
                 except Exception as e:
-                    log.warning(f"Position parse failed: {e}, p={p}")
+                    debug_info["pos_parse_exception"] = str(e)
                     continue
             
+            debug_info["normalized_count"] = len(normalized)
+            if normalized:
+                debug_info["first_normalized"] = normalized[0]
+            with open(debug_path, "w") as f:
+                json.dump(debug_info, f)
             return normalized
         except Exception as e:
-            log.warning(f"positions parse failed: {e}")
+            debug_info["outer_exception"] = str(e)
             import traceback
-            log.warning(traceback.format_exc()[:500])
+            debug_info["outer_tb"] = traceback.format_exc()[:1000]
+            try:
+                with open(debug_path, "w") as f:
+                    json.dump(debug_info, f)
+            except:
+                pass
             return []
 
     def open_orders(self, currency: str = "USDT") -> List[dict]:

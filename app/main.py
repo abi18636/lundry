@@ -24,7 +24,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED21-10REQ"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED22-FILE-DEBUG"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
@@ -185,73 +185,81 @@ def debug_ariax(authorization: Optional[str] = Header(None), x_token: Optional[s
 
 
 
+
+
+
+
+
+
+
+
+
+
 @app.get("/api/debug/wallet")
 def debug_wallet(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token)
     eng = get_engine()
     try:
         results = []
-        for i in range(10):
+        for i in range(3):
             try:
                 raw = eng.client._request("GET", "/api/wallet", use_v5=False)
                 results.append({"i": i, "ok": True, "equity": raw.get("equity") if isinstance(raw, dict) else None})
             except Exception as e:
                 import traceback
-                results.append({"i": i, "ok": False, "error": str(e), "tb": traceback.format_exc()[:500]})
+                results.append({"i": i, "ok": False, "error": str(e)})
         
         try:
             parsed = eng.client.account_summary("USDT")
-            # Try one more request after parsed
-            try:
-                raw_after = eng.client._request("GET", "/api/wallet", use_v5=False)
-                after_ok = True
-                after_equity = raw_after.get("equity") if isinstance(raw_after, dict) else None
-            except Exception as e:
-                after_ok = False
-                after_equity = str(e)
         except Exception as e:
             import traceback
             parsed = {"error": str(e), "tb": traceback.format_exc()[:500]}
-            after_ok = False
-            after_equity = None
         
+        # Read file debug
+        file_debug = {}
         try:
-            from app.ariax import last_wallet_debug
-            debug_global = last_wallet_debug
+            import json, os
+            if os.path.exists("/tmp/wallet_debug.json"):
+                with open("/tmp/wallet_debug.json", "r") as f:
+                    file_debug = json.load(f)
         except Exception as e:
-            debug_global = {"error": str(e)}
+            file_debug = {"error": str(e)}
         
-        return {"ok": True, "results": results, "parsed": parsed, "after_ok": after_ok, "after_equity": after_equity, "last_wallet_debug": debug_global, "version": eng.state.version, "build": BUILD}
+        return {"ok": True, "results": results, "parsed": parsed, "file_debug": file_debug, "version": eng.state.version, "build": BUILD}
     except Exception as e:
         import traceback
         return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}
-
-
-
-
-
-
 
 @app.get("/api/debug/positions")
 def debug_positions(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token)
     eng = get_engine()
     try:
-        raw = eng.client._request("GET", "/api/positions", use_v5=False)
-        debug_info = {}
-        debug_info["raw_type"] = str(type(raw))
-        if isinstance(raw, dict):
-            debug_info["raw_keys"] = list(raw.keys())
-            if "data" in raw and isinstance(raw["data"], list):
-                debug_info["data_len"] = len(raw["data"])
-                if raw["data"]:
-                    debug_info["first_raw"] = raw["data"][0]
+        try:
+            raw = eng.client._request("GET", "/api/positions", use_v5=False)
+            raw_ok = True
+            raw_len = len(raw.get("data", [])) if isinstance(raw, dict) and "data" in raw else 0
+        except Exception as e:
+            raw_ok = False
+            raw_len = 0
+            raw = {"error": str(e)}
+        
         try:
             parsed = eng.client.positions("USDT")
         except Exception as e:
             import traceback
-            parsed = [{"error": str(e), "tb": traceback.format_exc()[:500]}]
-        return {"ok": True, "raw": raw, "debug_info": debug_info, "parsed": parsed, "state_positions": eng.state.positions, "version": eng.state.version, "build": BUILD}
+            parsed = [{"error": str(e)}]
+        
+        file_debug = {}
+        try:
+            import json, os
+            if os.path.exists("/tmp/positions_debug.json"):
+                with open("/tmp/positions_debug.json", "r") as f:
+                    file_debug = json.load(f)
+        except Exception as e:
+            file_debug = {"error": str(e)}
+        
+        return {"ok": True, "raw_ok": raw_ok, "raw_len": raw_len, "raw": raw, "parsed": parsed, "file_debug": file_debug, "state_positions": eng.state.positions, "version": eng.state.version, "build": BUILD}
     except Exception as e:
         import traceback
         return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}

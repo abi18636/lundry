@@ -1,5 +1,5 @@
 """
-v018 FIXED21-10REQ"""
+v018 FIXED22-FILE-DEBUG"""
 from __future__ import annotations
 from functools import lru_cache
 from typing import List
@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
     telegram_bot_username: str = "TestTraid_bot"
     report_timezone: str = "Europe/Istanbul"
-    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED21-10REQ"
+    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED22-FILE-DEBUG"
 
     @property
     def effective_capital(self) -> float:
