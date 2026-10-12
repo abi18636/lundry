@@ -24,7 +24,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED16-ULTRA-SIMPLE"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED17-DOUBLE-REQ"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
@@ -190,40 +190,30 @@ def debug_wallet(authorization: Optional[str] = Header(None), x_token: Optional[
     _check_token(authorization, x_token)
     eng = get_engine()
     try:
-        raw = eng.client._request("GET", "/api/wallet", use_v5=False)
-        steps = {}
+        # Test double request
         try:
-            steps["raw_keys"] = list(raw.keys()) if isinstance(raw, dict) else str(type(raw))
-            steps["equity_raw"] = raw.get("equity") if isinstance(raw, dict) else None
-            spot_bal = 0.0
-            if isinstance(raw, dict) and "balances" in raw and isinstance(raw["balances"], dict):
-                spot_bal = float(raw["balances"].get("USDT") or 0)
-            steps["spot_bal"] = spot_bal
-            fut_bal = 0.0
-            if isinstance(raw, dict) and "futures" in raw and isinstance(raw["futures"], dict):
-                fb = raw["futures"].get("balances", {})
-                if isinstance(fb, dict):
-                    fut_bal = float(fb.get("USDT") or 0)
-            steps["fut_bal"] = fut_bal
-            equity = float(raw.get("equity") or 0) if isinstance(raw, dict) else 0
-            steps["equity"] = equity
-            steps["would_return"] = {"equity": equity, "available": float(raw.get("free_margin") or 0), "balance": fut_bal}
+            raw1 = eng.client._request("GET", "/api/wallet", use_v5=False)
+            raw1_ok = True
+        except Exception as e:
+            raw1 = {"error": str(e)}
+            raw1_ok = False
+        try:
+            raw2 = eng.client._request("GET", "/api/wallet", use_v5=False)
+            raw2_ok = True
+        except Exception as e:
+            raw2 = {"error": str(e)}
+            raw2_ok = False
+        try:
             parsed = eng.client.account_summary("USDT")
-            # Get global debug
-            try:
-                from app.ariax import last_wallet_debug
-                steps["last_wallet_debug"] = last_wallet_debug
-            except Exception as e:
-                steps["last_wallet_debug_error"] = str(e)
         except Exception as e:
             import traceback
-            steps["exception"] = str(e)
-            steps["tb"] = traceback.format_exc()[:1000]
+            parsed = {"error": str(e), "tb": traceback.format_exc()[:500]}
         
-        return {"ok": True, "raw": raw, "steps": steps, "parsed": eng.client.account_summary("USDT"), "version": eng.state.version, "build": BUILD}
+        return {"ok": True, "raw1_ok": raw1_ok, "raw1": raw1, "raw2_ok": raw2_ok, "raw2": raw2, "parsed": parsed, "version": eng.state.version, "build": BUILD}
     except Exception as e:
         import traceback
         return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}
+
 
 
 
