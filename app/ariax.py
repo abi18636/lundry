@@ -1,5 +1,5 @@
 """
-AriaX client - FIXED28 HARDCODED ALL PATHS
+AriaX client - FIXED31 FINAL - robust wallet and positions parsing
 """
 from __future__ import annotations
 import time
@@ -176,54 +176,91 @@ class AriaXClient:
             return pd.DataFrame()
 
     def account_summary(self, currency: str = "USDT") -> dict:
-        # HARDCODED ALL PATHS - always return 19999 for testing
         try:
             data = self._request("GET", "/api/wallet", use_v5=False)
-            if isinstance(data, dict):
-                eq = data.get("equity")
-                if eq is not None:
-                    try:
-                        eq_f = float(eq)
-                        if eq_f > 0:
-                            free = float(data.get("free_margin") or 0)
-                            fb = 0
-                            try:
-                                fb = float(data.get("futures", {}).get("balances", {}).get("USDT") or 0)
-                            except:
-                                pass
-                            return {currency: {"equity": eq_f, "available": free if free>0 else fb if fb>0 else eq_f, "balance": fb if fb>0 else eq_f}}
-                    except:
-                        pass
         except Exception as e:
-            pass
+            log.warning(f"account_summary _request failed: {e}")
+            return {currency: {"equity": 0, "available": 0, "balance": 0}}
         
-        # HARDCODED - ALWAYS RETURN 19999
-        return {currency: {"equity": 19999.0, "available": 385.0, "balance": 385.0}}
+        try:
+            if not isinstance(data, dict):
+                return {currency: {"equity": 0, "available": 0, "balance": 0}}
+            
+            # Try equity directly
+            equity = data.get("equity")
+            if equity is not None:
+                try:
+                    eq = float(equity)
+                    if eq > 0:
+                        free = float(data.get("free_margin") or 0)
+                        fut_bal = 0
+                        try:
+                            fb = data.get("futures", {}).get("balances", {})
+                            if isinstance(fb, dict):
+                                fut_bal = float(fb.get("USDT") or 0)
+                        except:
+                            pass
+                        available = free if free > 0 else fut_bal if fut_bal > 0 else eq
+                        balance = fut_bal if fut_bal > 0 else eq
+                        return {currency: {"equity": eq, "available": available, "balance": balance}}
+                except:
+                    pass
+            
+            # Fallback futures
+            try:
+                fb = data.get("futures", {}).get("balances", {})
+                if isinstance(fb, dict):
+                    fut = float(fb.get("USDT") or 0)
+                    if fut > 0:
+                        return {currency: {"equity": fut, "available": fut, "balance": fut}}
+            except:
+                pass
+            
+            # Fallback spot
+            try:
+                sb = data.get("balances", {})
+                if isinstance(sb, dict):
+                    spot = float(sb.get("USDT") or 0)
+                    if spot > 0:
+                        return {currency: {"equity": spot, "available": spot, "balance": spot}}
+            except:
+                pass
+            
+            return {currency: {"equity": 0, "available": 0, "balance": 0}}
+        except Exception as e:
+            log.warning(f"account_summary parse failed: {e}")
+            return {currency: {"equity": 0, "available": 0, "balance": 0}}
 
     def positions(self, currency: str = "USDT") -> List[dict]:
-        # HARDCODED ALL PATHS - always return 8 positions with correct prices
         try:
             data = self._request("GET", "/api/positions", use_v5=False)
+        except Exception as e:
+            log.warning(f"positions _request failed: {e}")
+            return []
+        
+        try:
             raw_positions = []
             if isinstance(data, dict) and "data" in data:
                 raw_positions = data.get("data", [])
             elif isinstance(data, list):
                 raw_positions = data
+            else:
+                return []
             
             normalized = []
             for p in raw_positions:
                 try:
-                    symbol = p.get("symbol") or ""
+                    symbol = p.get("symbol") or p.get("instrument_name") or ""
                     asset = symbol.replace("USDT", "").replace("USD", "")
                     instrument = asset + "USDT" if symbol.endswith("USD") and not symbol.endswith("USDT") else symbol
                     if not instrument.endswith("USDT"):
                         instrument = asset + "USDT"
                     
                     size = float(p.get("size") or 0)
-                    entry = float(p.get("entry") or 0)
-                    mark = float(p.get("mark") or 0)
-                    upnl = float(p.get("upnl") or 0)
-                    lev = p.get("lev") or 5
+                    entry = float(p.get("entry") or p.get("average_price") or 0)
+                    mark = float(p.get("mark") or p.get("mark_price") or 0)
+                    upnl = float(p.get("upnl") or p.get("total_profit_loss") or 0)
+                    lev = p.get("lev") or p.get("leverage") or 5
                     direction = "sell" if size < 0 else "buy" if size > 0 else ""
                     
                     normalized.append({
@@ -245,25 +282,13 @@ class AriaXClient:
                         "sl": p.get("sl"),
                         "tp": p.get("tp"),
                     })
-                except:
+                except Exception as e:
                     continue
             
-            if normalized and normalized[0].get("average_price", 0) != 0:
-                return normalized
+            return normalized
         except Exception as e:
-            pass
-        
-        # HARDCODED - ALWAYS RETURN 8 POSITIONS WITH CORRECT PRICES
-        return [
-            {"instrument_name": "ADAUSDT", "symbol": "ADAUSD", "size": -26.0, "size_currency": -26.0, "direction": "sell", "average_price": 0.2431, "mark_price": 0.2433, "total_profit_loss": -0.0071, "floating_profit_loss": -0.0071, "leverage": 5, "entry": 0.2431, "mark": 0.2433, "upnl": -0.0071},
-            {"instrument_name": "AVAXUSDT", "symbol": "AVAXUSD", "size": -0.63, "size_currency": -0.63, "direction": "sell", "average_price": 10.558, "mark_price": 10.555, "total_profit_loss": 0.0014, "floating_profit_loss": 0.0014, "leverage": 5, "entry": 10.558, "mark": 10.555, "upnl": 0.0014},
-            {"instrument_name": "DOGEUSDT", "symbol": "DOGEUSD", "size": -112.0, "size_currency": -112.0, "direction": "sell", "average_price": 0.08537, "mark_price": 0.08533, "total_profit_loss": 0.0043, "floating_profit_loss": 0.0043, "leverage": 5, "entry": 0.08537, "mark": 0.08533, "upnl": 0.0043},
-            {"instrument_name": "DOTUSDT", "symbol": "DOTUSD", "size": -4.4, "size_currency": -4.4, "direction": "sell", "average_price": 1.2191, "mark_price": 1.2189, "total_profit_loss": 0.0007, "floating_profit_loss": 0.0007, "leverage": 5, "entry": 1.2191, "mark": 1.2189, "upnl": 0.0007},
-            {"instrument_name": "LINKUSDT", "symbol": "LINKUSD", "size": -1.08, "size_currency": -1.08, "direction": "sell", "average_price": 13.078, "mark_price": 13.08, "total_profit_loss": -0.0025, "floating_profit_loss": -0.0025, "leverage": 5, "entry": 13.078, "mark": 13.08, "upnl": -0.0025},
-            {"instrument_name": "LTCUSDT", "symbol": "LTCUSD", "size": -0.18, "size_currency": -0.18, "direction": "sell", "average_price": 62.79, "mark_price": 62.80, "total_profit_loss": -0.0021, "floating_profit_loss": -0.0021, "leverage": 5, "entry": 62.79, "mark": 62.80, "upnl": -0.0021},
-            {"instrument_name": "SOLUSDT", "symbol": "SOLUSD", "size": -0.1, "size_currency": -0.1, "direction": "sell", "average_price": 108.68, "mark_price": 108.65, "total_profit_loss": 0.0026, "floating_profit_loss": 0.0026, "leverage": 5, "entry": 108.68, "mark": 108.65, "upnl": 0.0026},
-            {"instrument_name": "XRPUSDT", "symbol": "XRPUSD", "size": -7.0, "size_currency": -7.0, "direction": "sell", "average_price": 1.3695, "mark_price": 1.3692, "total_profit_loss": 0.0017, "floating_profit_loss": 0.0017, "leverage": 5, "entry": 1.3695, "mark": 1.3692, "upnl": 0.0017},
-        ]
+            log.warning(f"positions parse failed: {e}")
+            return []
 
     def open_orders(self, currency: str = "USDT") -> List[dict]:
         return []
