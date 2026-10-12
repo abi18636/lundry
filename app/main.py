@@ -24,7 +24,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED22-FILE-DEBUG"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED23-TMP-TEST"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
@@ -192,6 +192,54 @@ def debug_ariax(authorization: Optional[str] = Header(None), x_token: Optional[s
 
 
 
+
+
+
+
+@app.get("/api/debug/tmp")
+def debug_tmp(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    import os, json, time
+    test_path = "/tmp/test_write.json"
+    result = {}
+    try:
+        with open(test_path, "w") as f:
+            json.dump({"test": "ok", "time": time.time()}, f)
+        result["write_ok"] = True
+    except Exception as e:
+        import traceback
+        result["write_ok"] = False
+        result["write_error"] = str(e)
+        result["write_tb"] = traceback.format_exc()[:500]
+    
+    try:
+        if os.path.exists(test_path):
+            with open(test_path, "r") as f:
+                result["read"] = json.load(f)
+            result["exists"] = True
+        else:
+            result["exists"] = False
+    except Exception as e:
+        result["read_error"] = str(e)
+    
+    # Check wallet debug file
+    try:
+        if os.path.exists("/tmp/wallet_debug.json"):
+            with open("/tmp/wallet_debug.json", "r") as f:
+                result["wallet_debug_exists"] = True
+                result["wallet_debug"] = json.load(f)
+        else:
+            result["wallet_debug_exists"] = False
+    except Exception as e:
+        result["wallet_debug_error"] = str(e)
+    
+    # List /tmp
+    try:
+        result["tmp_list"] = os.listdir("/tmp")[:20]
+    except Exception as e:
+        result["tmp_list_error"] = str(e)
+    
+    return result
 
 
 
