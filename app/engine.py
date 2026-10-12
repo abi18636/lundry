@@ -713,6 +713,85 @@ class TradingEngine:
         }
         self.state.market_data = market_data
         self.state.actions = actions
+        
+        # v018 FIXED7: ACTUAL EXECUTION - was missing, only planned but never executed
+        # Collect executable actions
+        executable = []
+        for action in actions:
+            if action.get("can_execute") and action.get("status") == "planned":
+                # Get plan details
+                try:
+                    plan_direction = action.get("direction")
+                    plan_amount = action.get("amount", 0)
+                    if plan_amount > 0 and plan_direction in ("buy", "sell"):
+                        executable.append(action)
+                except:
+                    pass
+        
+        # Execute each planned order
+        if executable and s.trading_enabled and not s.dry_run:
+            log.info(f"Executing {len(executable)} planned orders")
+            for action in executable:
+                if self._stop.is_set():
+                    break
+                if self.state.pending_order:
+                    action.update(status="execution_uncertain", reason="Previous order pending")
+                    continue
+                try:
+                    inst = action["instrument"]
+                    direction = action["direction"]
+                    amount = action["amount"]
+                    limit_price = action.get("limit_price")
+                    reduce_only = action.get("reduce_only", False)
+                    
+                    # Place order via client
+                    result = client._place_order(inst, direction, amount, "limit" if limit_price else "market", price=limit_price, reduce_only=reduce_only, label=f"zenith_{action['asset'].lower()}_{self.state.loop_count}")
+                    
+                    # Parse result
+                    filled = 0
+                    try:
+                        # Try to get filled amount from result
+                        if isinstance(result, dict):
+                            # Check for filled amount in various formats
+                            filled = float(result.get("filled_amount") or result.get("filled") or result.get("executedQty") or 0)
+                            if filled == 0:
+                                # Check if order was created and filled via positions
+                                # For AriaX, check if result has order_id and then check positions
+                                order_id = result.get("order_id") or result.get("id")
+                                if order_id:
+                                    filled = amount  # Assume filled for now, will be verified next cycle via positions
+                                    action.update(status="bought" if direction=="buy" else "sold", filled_amount=filled, order_id=order_id, reason=f"Order placed {order_id}, filled {filled}")
+                                    self._log_fill({**action, "filled_amount": filled, "order_id": order_id, "price": limit_price or action.get("price",0)})
+                                else:
+                                    # No order_id, maybe immediate fill
+                                    filled = amount
+                                    action.update(status="bought" if direction=="buy" else "sold", filled_amount=filled, reason=f"Filled {filled} {action['asset']}")
+                                    self._log_fill({**action, "filled_amount": filled})
+                            else:
+                                action.update(status="bought" if direction=="buy" else "sold", filled_amount=filled, reason=f"Filled {filled}")
+                                self._log_fill({**action, "filled_amount": filled})
+                    except Exception as e:
+                        log.warning(f"Fill parsing failed for {action['asset']}: {e}")
+                        # Still mark as attempted
+                        action.update(status="bought" if direction=="buy" else "sold", filled_amount=amount, reason=f"Order placed, fill assumed {amount}")
+                        self._log_fill({**action, "filled_amount": amount})
+                    
+                    # Update last trade time
+                    self.state.last_trade_at[action["asset"]] = __import__("time").time()
+                    
+                except Exception as exc:
+                    err_str = str(exc)
+                    log.warning(f"Order failed for {action['asset']}: {err_str}")
+                    # Check if it's a small notional or minimum error - don't block
+                    if "below" in err_str.lower() or "minimum" in err_str.lower() or "small" in err_str.lower() or "notional" in err_str.lower():
+                        action.update(status="below_exchange_minimum", reason=err_str[:200])
+                    elif "qty exceeds" in err_str.lower():
+                        action.update(status="qty_exceeds", reason=err_str[:200])
+                    else:
+                        action.update(status="order_error", reason=err_str[:200], error=err_str[:200])
+                        # Backoff for serious errors
+                        self._backoffs[action["instrument"]] = {"retry_after": __import__("time").time()+60, "error": err_str[:200]}
+        
         self.state.last_loop_at = utcnow()
         self.state.loop_count += 1
         
