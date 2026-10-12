@@ -24,7 +24,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED11-CLEAN-FULL"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED12-DEBUG-FULL"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
@@ -168,13 +168,47 @@ def sleeves(authorization: Optional[str] = Header(None), x_token: Optional[str] 
 
 
 
+
+
+
+
+@app.get("/api/debug/ariax")
+def debug_ariax(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    try:
+        with open("app/ariax.py", "r") as f:
+            txt = f.read()
+        return {"ok": True, "content": txt[:10000], "build": BUILD, "version": get_engine().state.version}
+    except Exception as e:
+        import traceback
+        return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}
+
+
+
 @app.get("/api/debug/wallet")
 def debug_wallet(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token)
     eng = get_engine()
     try:
         raw = eng.client._request("GET", "/api/wallet", use_v5=False)
-        return {"ok": True, "raw": raw, "parsed": eng.client.account_summary("USDT"), "version": eng.state.version, "build": BUILD}
+        debug_info = {}
+        debug_info["raw_keys"] = list(raw.keys()) if isinstance(raw, dict) else str(type(raw))
+        debug_info["has_balances"] = "balances" in raw if isinstance(raw, dict) else False
+        debug_info["has_futures"] = "futures" in raw if isinstance(raw, dict) else False
+        debug_info["equity_raw"] = raw.get("equity") if isinstance(raw, dict) else None
+        debug_info["free_margin_raw"] = raw.get("free_margin") if isinstance(raw, dict) else None
+        if isinstance(raw, dict) and "balances" in raw and isinstance(raw["balances"], dict):
+            debug_info["balances_USDT"] = raw["balances"].get("USDT")
+        if isinstance(raw, dict) and "futures" in raw and isinstance(raw["futures"], dict):
+            fb = raw["futures"].get("balances", {})
+            debug_info["futures_balances"] = fb
+            debug_info["futures_USDT"] = fb.get("USDT") if isinstance(fb, dict) else str(fb)[:200]
+        try:
+            parsed = eng.client.account_summary("USDT")
+        except Exception as e:
+            import traceback
+            parsed = {"error": str(e), "tb": traceback.format_exc()[:500]}
+        return {"ok": True, "raw": raw, "debug_info": debug_info, "parsed": parsed, "version": eng.state.version, "build": BUILD}
     except Exception as e:
         import traceback
         return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}
@@ -185,7 +219,20 @@ def debug_positions(authorization: Optional[str] = Header(None), x_token: Option
     eng = get_engine()
     try:
         raw = eng.client._request("GET", "/api/positions", use_v5=False)
-        return {"ok": True, "raw": raw, "parsed": eng.client.positions("USDT"), "state_positions": eng.state.positions, "version": eng.state.version, "build": BUILD}
+        debug_info = {}
+        debug_info["raw_type"] = str(type(raw))
+        if isinstance(raw, dict):
+            debug_info["raw_keys"] = list(raw.keys())
+            if "data" in raw and isinstance(raw["data"], list):
+                debug_info["data_len"] = len(raw["data"])
+                if raw["data"]:
+                    debug_info["first_raw"] = raw["data"][0]
+        try:
+            parsed = eng.client.positions("USDT")
+        except Exception as e:
+            import traceback
+            parsed = [{"error": str(e), "tb": traceback.format_exc()[:500]}]
+        return {"ok": True, "raw": raw, "debug_info": debug_info, "parsed": parsed, "state_positions": eng.state.positions, "version": eng.state.version, "build": BUILD}
     except Exception as e:
         import traceback
         return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}
