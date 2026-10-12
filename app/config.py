@@ -1,7 +1,6 @@
 """
-v018 FIXED6 - ABSOLUTE FORCE 10 pairs, 7 sleeves
-Fixes Render dashboard env var with 25 assets
-"""
+v018 FIXED10 - CLEAN FULL
+Fixes positions and wallet parsing
 from __future__ import annotations
 from functools import lru_cache
 from typing import List
@@ -81,7 +80,7 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
     telegram_bot_username: str = "TestTraid_bot"
     report_timezone: str = "Europe/Istanbul"
-    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED9-POSITIONS-FULL"
+    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED10-CLEAN-FULL"
 
     @property
     def effective_capital(self) -> float:

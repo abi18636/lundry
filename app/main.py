@@ -13,11 +13,18 @@ from fastapi.responses import HTMLResponse
 from app.config import get_settings
 from app.engine import EngineBusyError, get_engine
 
+import shutil, pathlib
+# Clear pycache on startup for clean deploy
+for p in pathlib.Path('.').rglob('__pycache__'):
+    try:
+        shutil.rmtree(p)
+    except:
+        pass
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED9-POSITIONS-FULL"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED10-CLEAN-FULL"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
@@ -157,6 +164,34 @@ def sleeves(authorization: Optional[str] = Header(None), x_token: Optional[str] 
     return {"sleeves": snap["sleeves"], "net_book": snap["net_book"], "config": snap["config"], "version": snap.get("version")}
 
 
+
+
+
+
+@app.get("/api/debug/wallet")
+def debug_wallet(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    eng = get_engine()
+    try:
+        raw = eng.client._request("GET", "/api/wallet", use_v5=False)
+        return {"ok": True, "raw": raw, "parsed": eng.client.account_summary("USDT"), "version": eng.state.version, "build": BUILD}
+    except Exception as e:
+        import traceback
+        return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}
+
+@app.get("/api/debug/positions")
+def debug_positions(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    eng = get_engine()
+    try:
+        raw = eng.client._request("GET", "/api/positions", use_v5=False)
+        return {"ok": True, "raw": raw, "parsed": eng.client.positions("USDT"), "state_positions": eng.state.positions, "version": eng.state.version, "build": BUILD}
+    except Exception as e:
+        import traceback
+        return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}
+
+
+
 @app.get("/api/positions")
 def positions(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token)
@@ -170,6 +205,10 @@ def close_position(asset: str, authorization: Optional[str] = Header(None), x_to
     eng = get_engine()
     result = eng.close_position(asset.upper())
     return result
+
+
+@app.post("/api/close-all")
+
 
 
 @app.post("/api/close-all")

@@ -3,7 +3,7 @@ services:
     name: zenith-trader-bot
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; find . -name "*.pyc" -delete 2>/dev/null; pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     autoDeploy: true
@@ -39,11 +39,11 @@ services:
       - key: MAX_NOTIONAL_USD
         value: "200"
       - key: MIN_NOTIONAL_USD
-        value: "5"
+        value: "1"
       - key: CANDLE_LOOKBACK_HOURS
         value: "1000"
       - key: REBALANCE_NOTIONAL_USD
-        value: "5.0"
+        value: "1.0"
       - key: MARKET_DATA_MAX_AGE_SECONDS
         value: "180"
       - key: MAX_SPREAD_BPS

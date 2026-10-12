@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from app.config_v018 import Settings, get_settings
+from app.config import Settings, get_settings
 from app.execution_v016 import fill_summary, floor_amount, ioc_price, plan_rebalance, signed_position
 from app.sleeves_v016 import parse_weights, run_all_sleeves, _detect_regime
 from app.ariax_v016 import AriaXClient, AriaXAPIError
