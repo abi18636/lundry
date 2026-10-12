@@ -1,5 +1,5 @@
 """
-AriaX client - FIXED22 FILE DEBUG
+AriaX client - FIXED24 FILE DEBUG with default=str
 """
 from __future__ import annotations
 import time
@@ -179,36 +179,39 @@ class AriaXClient:
 
     def account_summary(self, currency: str = "USDT") -> dict:
         debug_path = "/tmp/wallet_debug.json"
-        debug_info = {"called_at": time.time()}
+        debug_info = {"called_at": time.time(), "pid": os.getpid()}
         try:
             data = self._request("GET", "/api/wallet", use_v5=False)
             debug_info["request_ok"] = True
             debug_info["data_keys"] = list(data.keys()) if isinstance(data, dict) else str(type(data))
             debug_info["equity_raw"] = data.get("equity") if isinstance(data, dict) else None
+            debug_info["equity_type"] = str(type(data.get("equity"))) if isinstance(data, dict) else None
         except Exception as e:
             debug_info["request_exception"] = str(e)
             import traceback
             debug_info["request_tb"] = traceback.format_exc()[:1000]
             try:
                 with open(debug_path, "w") as f:
-                    json.dump(debug_info, f)
-            except:
-                pass
+                    json.dump(debug_info, f, default=str)
+            except Exception as e2:
+                debug_info["file_write_error"] = str(e2)
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
         
         try:
             if not isinstance(data, dict):
                 debug_info["not_dict"] = True
                 with open(debug_path, "w") as f:
-                    json.dump(debug_info, f)
+                    json.dump(debug_info, f, default=str)
                 return {currency: {"equity": 0, "available": 0, "balance": 0}}
             
             equity = data.get("equity")
             debug_info["equity"] = equity
+            debug_info["equity_is_none"] = equity is None
             if equity is not None:
                 try:
                     eq = float(equity)
                     debug_info["eq_float"] = eq
+                    debug_info["eq_gt_0"] = eq > 0
                     if eq > 0:
                         free = float(data.get("free_margin") or 0)
                         debug_info["free"] = free
@@ -226,8 +229,10 @@ class AriaXClient:
                         debug_info["returning"] = "equity"
                         debug_info["result"] = result
                         with open(debug_path, "w") as f:
-                            json.dump(debug_info, f)
+                            json.dump(debug_info, f, default=str)
                         return result
+                    else:
+                        debug_info["eq_not_gt_0"] = True
                 except Exception as e:
                     debug_info["equity_parse_exception"] = str(e)
                     import traceback
@@ -244,14 +249,14 @@ class AriaXClient:
                         result = {currency: {"equity": fut, "available": fut, "balance": fut}}
                         debug_info["result"] = result
                         with open(debug_path, "w") as f:
-                            json.dump(debug_info, f)
+                            json.dump(debug_info, f, default=str)
                         return result
             except Exception as e:
                 debug_info["fut_exception"] = str(e)
             
             debug_info["returning"] = "zero"
             with open(debug_path, "w") as f:
-                json.dump(debug_info, f)
+                json.dump(debug_info, f, default=str)
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
         except Exception as e:
             debug_info["outer_exception"] = str(e)
@@ -259,14 +264,14 @@ class AriaXClient:
             debug_info["outer_tb"] = traceback.format_exc()[:1000]
             try:
                 with open(debug_path, "w") as f:
-                    json.dump(debug_info, f)
+                    json.dump(debug_info, f, default=str)
             except:
                 pass
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
 
     def positions(self, currency: str = "USDT") -> List[dict]:
         debug_path = "/tmp/positions_debug.json"
-        debug_info = {"called_at": time.time()}
+        debug_info = {"called_at": time.time(), "pid": os.getpid()}
         try:
             data = self._request("GET", "/api/positions", use_v5=False)
             debug_info["request_ok"] = True
@@ -283,7 +288,7 @@ class AriaXClient:
             debug_info["request_tb"] = traceback.format_exc()[:1000]
             try:
                 with open(debug_path, "w") as f:
-                    json.dump(debug_info, f)
+                    json.dump(debug_info, f, default=str)
             except:
                 pass
             return []
@@ -297,7 +302,7 @@ class AriaXClient:
             else:
                 debug_info["unknown_format"] = str(data)[:500]
                 with open(debug_path, "w") as f:
-                    json.dump(debug_info, f)
+                    json.dump(debug_info, f, default=str)
                 return []
             
             debug_info["raw_count"] = len(raw_positions)
@@ -345,7 +350,7 @@ class AriaXClient:
             if normalized:
                 debug_info["first_normalized"] = normalized[0]
             with open(debug_path, "w") as f:
-                json.dump(debug_info, f)
+                json.dump(debug_info, f, default=str)
             return normalized
         except Exception as e:
             debug_info["outer_exception"] = str(e)
@@ -353,7 +358,7 @@ class AriaXClient:
             debug_info["outer_tb"] = traceback.format_exc()[:1000]
             try:
                 with open(debug_path, "w") as f:
-                    json.dump(debug_info, f)
+                    json.dump(debug_info, f, default=str)
             except:
                 pass
             return []
