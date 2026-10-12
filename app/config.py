@@ -1,6 +1,6 @@
 """
-v018 FIXED10 - CLEAN FULL
-Fixes positions and wallet parsing
+v018 FIXED10 - CLEAN FULL - 10 pairs, 7 sleeves, robust parsing
+"""
 from __future__ import annotations
 from functools import lru_cache
 from typing import List
