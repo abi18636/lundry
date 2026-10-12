@@ -9,6 +9,8 @@ import httpx
 import pandas as pd
 
 log = logging.getLogger("ariax")
+last_wallet_debug = {}
+last_positions_debug = {}
 
 class AriaXAPIError(Exception):
     def __init__(self, path: str, code, msg: str):
@@ -176,14 +178,18 @@ class AriaXClient:
             return pd.DataFrame()
 
     def account_summary(self, currency: str = "USDT") -> dict:
+        global last_wallet_debug
+        last_wallet_debug = {}
         try:
             data = self._request("GET", "/api/wallet", use_v5=False)
-            log.info(f"Wallet raw keys={list(data.keys()) if isinstance(data, dict) else type(data)} preview={str(data)[:600]}")
+            last_wallet_debug["raw_keys"] = list(data.keys()) if isinstance(data, dict) else str(type(data))
+            last_wallet_debug["raw_preview"] = str(data)[:500]
             
             if isinstance(data, dict) and "data" in data and isinstance(data["data"], dict):
                 inner = data["data"]
                 if "balances" in inner or "equity" in inner or "futures" in inner:
                     data = inner
+                    last_wallet_debug["unwrapped"] = True
             
             if isinstance(data, dict):
                 spot_bal = 0.0
@@ -191,33 +197,35 @@ class AriaXClient:
                 try:
                     if "balances" in data and isinstance(data["balances"], dict):
                         spot_bal = float(data["balances"].get("USDT") or data["balances"].get("USDC") or 0)
-                        log.info(f"Wallet spot_bal from balances: {spot_bal}")
                     if "spot" in data and isinstance(data["spot"], dict):
                         sb = data["spot"].get("balances", {})
                         if isinstance(sb, dict):
                             sb_val = float(sb.get("USDT") or 0)
                             if sb_val > 0:
                                 spot_bal = sb_val
-                            log.info(f"Wallet spot_bal from spot.balances: {spot_bal}")
                     if "futures" in data and isinstance(data["futures"], dict):
                         fb = data["futures"].get("balances", {})
                         if isinstance(fb, dict):
                             fut_bal = float(fb.get("USDT") or fb.get("USDC") or 0)
                         elif isinstance(fb, (int, float)):
                             fut_bal = float(fb)
-                        log.info(f"Wallet fut_bal: {fut_bal}")
+                    last_wallet_debug["spot_bal"] = spot_bal
+                    last_wallet_debug["fut_bal"] = fut_bal
                 except Exception as e:
-                    log.warning(f"Wallet balances parse failed: {e}")
+                    last_wallet_debug["balances_exception"] = str(e)
                     import traceback
-                    log.warning(traceback.format_exc()[:500])
+                    last_wallet_debug["balances_tb"] = traceback.format_exc()[:500]
                 
                 try:
                     equity_raw = data.get("equity")
                     free_raw = data.get("free_margin") or data.get("free")
-                    log.info(f"Wallet equity_raw={equity_raw} free_raw={free_raw} spot_bal={spot_bal} fut_bal={fut_bal}")
+                    last_wallet_debug["equity_raw"] = equity_raw
+                    last_wallet_debug["free_raw"] = free_raw
                     equity = float(equity_raw or 0)
                     free = float(free_raw or 0)
-                    log.info(f"Wallet equity={equity} free={free}")
+                    last_wallet_debug["equity"] = equity
+                    last_wallet_debug["free"] = free
+                    last_wallet_debug["equity_gt_0"] = equity > 0
                     if equity > 0:
                         available = free if free > 0 else fut_bal if fut_bal > 0 else equity
                         balance = fut_bal if fut_bal > 0 else spot_bal if spot_bal > 0 else equity
@@ -228,7 +236,8 @@ class AriaXClient:
                                 "balance": float(balance),
                             }
                         }
-                        log.info(f"Wallet returning equity result: {result}")
+                        last_wallet_debug["returning"] = "equity"
+                        last_wallet_debug["result"] = result
                         return result
                     if fut_bal > 0:
                         result = {
@@ -238,7 +247,8 @@ class AriaXClient:
                                 "balance": float(fut_bal),
                             }
                         }
-                        log.info(f"Wallet returning fut_bal result: {result}")
+                        last_wallet_debug["returning"] = "fut_bal"
+                        last_wallet_debug["result"] = result
                         return result
                     if spot_bal > 0:
                         result = {
@@ -248,12 +258,14 @@ class AriaXClient:
                                 "balance": float(spot_bal),
                             }
                         }
-                        log.info(f"Wallet returning spot_bal result: {result}")
+                        last_wallet_debug["returning"] = "spot_bal"
+                        last_wallet_debug["result"] = result
                         return result
+                    last_wallet_debug["no_positive"] = True
                 except Exception as e:
-                    log.warning(f"Wallet equity parse failed: {e}")
+                    last_wallet_debug["equity_exception"] = str(e)
                     import traceback
-                    log.warning(traceback.format_exc()[:500])
+                    last_wallet_debug["equity_tb"] = traceback.format_exc()[:1000]
                 
                 for key in ("USDT", currency, "USDC"):
                     d = data.get(key)
@@ -261,6 +273,7 @@ class AriaXClient:
                         try:
                             eq = float(d.get("equity") or d.get("balance") or 0)
                             if eq > 0:
+                                last_wallet_debug["returning"] = f"direct_{key}"
                                 return {
                                     currency: {
                                         "equity": eq,
@@ -271,9 +284,15 @@ class AriaXClient:
                         except:
                             pass
                     elif isinstance(d, (int, float)) and float(d) > 0:
+                        last_wallet_debug["returning"] = f"direct_{key}_float"
                         return {currency: {"equity": float(d), "available": float(d), "balance": float(d)}}
             
-            log.warning(f"Wallet no equity found, returning 0, raw={str(data)[:500]}")
+            last_wallet_debug["returning"] = "zero"
+            return {currency: {"equity": 0, "available": 0, "balance": 0}}
+        except Exception as e:
+            last_wallet_debug["outer_exception"] = str(e)
+            import traceback
+            last_wallet_debug["outer_tb"] = traceback.format_exc()[:1000]
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
         except Exception as e:
             log.warning(f"account_summary exception: {e}")
