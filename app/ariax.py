@@ -1,81 +1,41 @@
 """
-v016 COMPANY FIXES - AriaX Client
-Fix #2 ROOT: Close position with live fetch + 0.999 safety + 95% retry, not 50% hack
-Fix #1: Allow real close/reduce/reversal
+AriaX client - FIXED11 CLEAN - robust wallet and positions parsing
 """
 from __future__ import annotations
-
-import hashlib
-import hmac
-import logging
 import time
-from typing import Any, Dict, List, Optional
-
+import logging
+from typing import List, Optional, Dict
 import httpx
 import pandas as pd
 
 log = logging.getLogger("ariax")
 
-
-class AriaXAPIError(RuntimeError):
-    def __init__(self, method: str, code: Any, message: str, data: Any = None):
-        self.method, self.code, self.data = method, code, data
-        super().__init__(f"{method}: {code} {message}")
-
+class AriaXAPIError(Exception):
+    def __init__(self, path: str, code, msg: str):
+        self.path = path
+        self.code = code
+        super().__init__(f"{path} {code}: {msg}")
 
 class AriaXClient:
-    def __init__(self, base_url: str, api_key: str, api_secret: str, timeout: float = 20.0, fallback_url: str = ""):
-        self.base = base_url.rstrip("/")
-        self.fallback = fallback_url.rstrip("/") if fallback_url else ""
+    def __init__(self, base_url: str, api_key: str, api_secret: str, fallback_url: Optional[str] = None):
+        self.base_url = (base_url or "").rstrip("/")
+        self.fallback_url = (fallback_url or self.base_url).rstrip("/")
         self.api_key = api_key
         self.api_secret = api_secret
-        self._http = httpx.Client(timeout=timeout)
+        self._http = httpx.Client(timeout=15.0)
         self._instrument_cache: Dict[str, tuple] = {}
 
-    def close(self):
-        self._http.close()
-
-    def _request(self, method: str, path: str, params: Optional[dict] = None, json_body: Optional[dict] = None, use_v5: bool = False, is_public: bool = False) -> Any:
-        urls = [self.base]
-        if self.fallback and self.fallback != self.base:
-            urls.append(self.fallback)
-        
+    def _request(self, method: str, path: str, params: Optional[dict] = None, json_body: Optional[dict] = None, use_v5: bool = False, is_public: bool = False):
+        urls = [self.base_url, self.fallback_url] if self.fallback_url != self.base_url else [self.base_url]
         last_exc = None
         for base in urls:
-            url = base + path
+            url = f"{base}{path}"
             try:
                 if is_public:
                     if method == "GET":
                         resp = self._http.get(url, params=params)
                     else:
                         resp = self._http.request(method, url, params=params, json=json_body)
-                elif use_v5:
-                    import json as js
-                    ts = str(int(time.time() * 1000))
-                    recv = "10000"
-                    if method == "GET":
-                        query = "&".join(f"{k}={v}" for k, v in (params or {}).items())
-                        payload = f"{ts}{self.api_key}{recv}{query}"
-                        sig = hmac.new(self.api_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
-                        headers = {
-                            "X-BAPI-API-KEY": self.api_key,
-                            "X-BAPI-TIMESTAMP": ts,
-                            "X-BAPI-RECV-WINDOW": recv,
-                            "X-BAPI-SIGNATURE": sig,
-                        }
-                        resp = self._http.get(url, params=params, headers=headers)
-                    else:
-                        body_str = js.dumps(json_body or {}, separators=(",", ":"))
-                        payload = f"{ts}{self.api_key}{recv}{body_str}"
-                        sig = hmac.new(self.api_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
-                        headers = {
-                            "X-BAPI-API-KEY": self.api_key,
-                            "X-BAPI-TIMESTAMP": ts,
-                            "X-BAPI-RECV-WINDOW": recv,
-                            "X-BAPI-SIGNATURE": sig,
-                            "Content-Type": "application/json"
-                        }
-                        resp = self._http.request(method, url, content=body_str.encode(), headers=headers)
                 else:
                     headers = {"X-API-Key": self.api_key, "X-API-Secret": self.api_secret}
                     if method == "GET":
@@ -119,7 +79,6 @@ class AriaXClient:
             raise last_exc
         raise AriaXAPIError(path, -1, "all endpoints failed")
 
-    # Public
     def ticker(self, instrument: str) -> dict:
         try:
             data = self._request("GET", "/v5/market/tickers", params={"category": "linear", "symbol": instrument}, is_public=True)
@@ -216,44 +175,103 @@ class AriaXClient:
             log.warning(f"candles failed for {instrument}: {exc}")
             return pd.DataFrame()
 
-    # Private
     def account_summary(self, currency: str = "USDT") -> dict:
         try:
             data = self._request("GET", "/api/wallet", use_v5=False)
-            if isinstance(data, dict) and "balances" in data:
-                # New format: balances.USDT, futures.balances.USDT, equity, free_margin
-                spot_bal = data.get("balances", {}).get("USDT", 0)
-                fut_bal = data.get("futures", {}).get("balances", {}).get("USDT", 0)
-                equity = data.get("equity") or (spot_bal + fut_bal)
-                free = data.get("free_margin") or fut_bal
-                return {
-                    currency: {
-                        "equity": float(equity),
-                        "available": float(free),
-                        "balance": float(fut_bal or spot_bal),
-                    }
-                }
-            # Fallback old format
-            for key in ("USDT", currency, "USDC"):
-                d = data.get(key) or {}
-                if d:
-                    return {
-                        currency: {
-                            "equity": float(d.get("equity") or d.get("balance") or 0),
-                            "available": float(d.get("available") or d.get("free") or d.get("balance") or 0),
-                            "balance": float(d.get("balance") or 0),
+            log.info(f"Wallet raw keys={list(data.keys()) if isinstance(data, dict) else type(data)} preview={str(data)[:600]}")
+            
+            # Unwrap if wrapped in ok/data
+            if isinstance(data, dict) and "data" in data and isinstance(data["data"], dict):
+                inner = data["data"]
+                if "balances" in inner or "equity" in inner or "futures" in inner:
+                    data = inner
+            
+            if isinstance(data, dict):
+                # New format: has balances, futures, equity, free_margin, locks, spot
+                # Example: {"ok": true, "balances": {"USDT": 19598}, "futures": {"balances": {"USDT": 385}}, "equity": 19999, "free_margin": 385}
+                spot_bal = 0
+                fut_bal = 0
+                try:
+                    if "balances" in data and isinstance(data["balances"], dict):
+                        spot_bal = float(data["balances"].get("USDT") or data["balances"].get("USDC") or 0)
+                    if "spot" in data and isinstance(data["spot"], dict):
+                        sb = data["spot"].get("balances", {})
+                        if isinstance(sb, dict):
+                            spot_bal = float(sb.get("USDT") or spot_bal)
+                    if "futures" in data and isinstance(data["futures"], dict):
+                        fb = data["futures"].get("balances", {})
+                        if isinstance(fb, dict):
+                            fut_bal = float(fb.get("USDT") or fb.get("USDC") or 0)
+                        elif isinstance(fb, (int, float)):
+                            fut_bal = float(fb)
+                except Exception as e:
+                    log.warning(f"Wallet balances parse failed: {e}")
+                
+                try:
+                    equity = float(data.get("equity") or 0)
+                    free = float(data.get("free_margin") or data.get("free") or 0)
+                    # If equity present, use it
+                    if equity > 0:
+                        available = free if free > 0 else fut_bal if fut_bal > 0 else equity
+                        balance = fut_bal if fut_bal > 0 else spot_bal if spot_bal > 0 else equity
+                        return {
+                            currency: {
+                                "equity": float(equity),
+                                "available": float(available),
+                                "balance": float(balance),
+                            }
                         }
-                    }
+                    # If no equity but futures balance present
+                    if fut_bal > 0:
+                        return {
+                            currency: {
+                                "equity": float(fut_bal),
+                                "available": float(fut_bal),
+                                "balance": float(fut_bal),
+                            }
+                        }
+                    if spot_bal > 0:
+                        return {
+                            currency: {
+                                "equity": float(spot_bal),
+                                "available": float(spot_bal),
+                                "balance": float(spot_bal),
+                            }
+                        }
+                except Exception as e:
+                    log.warning(f"Wallet equity parse failed: {e}")
+                
+                # Check direct USDT key
+                for key in ("USDT", currency, "USDC"):
+                    d = data.get(key)
+                    if isinstance(d, dict) and d:
+                        try:
+                            eq = float(d.get("equity") or d.get("balance") or 0)
+                            if eq > 0:
+                                return {
+                                    currency: {
+                                        "equity": eq,
+                                        "available": float(d.get("available") or d.get("free") or d.get("balance") or eq),
+                                        "balance": float(d.get("balance") or eq),
+                                    }
+                                }
+                        except:
+                            pass
+                    elif isinstance(d, (int, float)) and float(d) > 0:
+                        return {currency: {"equity": float(d), "available": float(d), "balance": float(d)}}
+            
+            log.warning(f"Wallet no equity found, returning 0, raw={str(data)[:500]}")
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
-        except Exception:
+        except Exception as e:
+            log.warning(f"account_summary exception: {e}")
+            import traceback
+            log.warning(traceback.format_exc()[:500])
             return {currency: {"equity": 0, "available": 0, "balance": 0}}
+
     def positions(self, currency: str = "USDT") -> List[dict]:
         try:
             data = self._request("GET", "/api/positions", use_v5=False)
-            try:
-                log.info(f"Positions raw preview: {str(data)[:800]}")
-            except:
-                pass
+            log.info(f"Positions raw type={type(data)} preview={str(data)[:800]}")
             
             raw_positions = []
             if isinstance(data, dict) and "data" in data:
@@ -270,33 +288,44 @@ class AriaXClient:
             for p in raw_positions:
                 try:
                     symbol = p.get("symbol") or p.get("instrument_name") or p.get("instrument") or ""
-                    asset = symbol.replace("USD", "").replace("USDT", "").replace("USDC", "").replace("-", "").replace("/", "")
-                    if symbol.endswith("USD") and not symbol.endswith("USDT"):
+                    # Clean asset name: ADAUSD -> ADA, BTCUSDT -> BTC
+                    asset = symbol.replace("USDT", "").replace("USDC", "").replace("USD", "").replace("-", "").replace("/", "")
+                    # Handle case where symbol is already ADAUSDT
+                    if symbol.endswith("USDT"):
+                        instrument = symbol
+                    elif symbol.endswith("USD") and not symbol.endswith("USDT"):
                         instrument = asset + "USDT"
                     else:
                         instrument = symbol if symbol else asset + "USDT"
+                        if not instrument.endswith("USDT"):
+                            instrument = asset + "USDT"
                     
                     size = float(p.get("size") or p.get("qty") or p.get("size_currency") or 0)
+                    
                     entry = 0
                     for key in ("entry", "average_price", "avg_price", "entry_price", "price", "open_price"):
                         val = p.get(key)
                         if val is not None:
                             try:
-                                entry = float(val)
-                                if entry != 0:
+                                f = float(val)
+                                if f != 0:
+                                    entry = f
                                     break
                             except:
                                 pass
+                    
                     mark = 0
                     for key in ("mark", "mark_price", "last_price", "close", "current_price"):
                         val = p.get(key)
                         if val is not None:
                             try:
-                                mark = float(val)
-                                if mark != 0:
+                                f = float(val)
+                                if f != 0:
+                                    mark = f
                                     break
                             except:
                                 pass
+                    
                     upnl = 0
                     for key in ("upnl", "total_profit_loss", "floating_profit_loss", "pnl", "unrealized_pnl", "profit"):
                         val = p.get(key)
@@ -306,6 +335,7 @@ class AriaXClient:
                                 break
                             except:
                                 pass
+                    
                     lev = p.get("lev") or p.get("leverage") or 5
                     
                     direction = "sell" if size < 0 else "buy" if size > 0 else str(p.get("direction", ""))
@@ -332,60 +362,12 @@ class AriaXClient:
                 except Exception as e:
                     log.warning(f"Position normalize failed for {p}: {e}")
                     normalized.append(p)
+            
             log.info(f"Positions normalized {len(normalized)} from {len(raw_positions)} raw, first={normalized[0] if normalized else 'none'}")
             return normalized
         except Exception as e:
             import traceback
             log.warning(f"positions exception: {e} {traceback.format_exc()[:500]}")
-            return []
-            
-            # Normalize to expected format for engine and dashboard
-            normalized = []
-            for p in raw_positions:
-                try:
-                    # Real format: symbol: ADAUSD, size: -27, entry: 0.2423, mark: 0.2429, upnl: -0.0172, lev: 5
-                    symbol = p.get("symbol") or p.get("instrument_name") or ""
-                    # Convert ADAUSD -> ADAUSDT for consistency, but keep original too
-                    asset = symbol.replace("USD", "").replace("USDT", "")
-                    if symbol.endswith("USD") and not symbol.endswith("USDT"):
-                        instrument = asset + "USDT"
-                    else:
-                        instrument = symbol
-                    
-                    size = float(p.get("size") or 0)
-                    entry = float(p.get("entry") or p.get("average_price") or 0)
-                    mark = float(p.get("mark") or p.get("mark_price") or 0)
-                    upnl = float(p.get("upnl") or p.get("total_profit_loss") or p.get("floating_profit_loss") or 0)
-                    lev = p.get("lev") or p.get("leverage") or 5
-                    
-                    direction = "sell" if size < 0 else "buy" if size > 0 else ""
-                    
-                    normalized.append({
-                        "instrument_name": instrument,
-                        "symbol": symbol,
-                        "size": size,
-                        "size_currency": size,
-                        "direction": direction,
-                        "average_price": entry,
-                        "mark_price": mark,
-                        "total_profit_loss": upnl,
-                        "floating_profit_loss": upnl,
-                        "leverage": lev,
-                        "entry": entry,
-                        "mark": mark,
-                        "upnl": upnl,
-                        "margin": p.get("margin"),
-                        "liq": p.get("liq"),
-                        "sl": p.get("sl"),
-                        "tp": p.get("tp"),
-                    })
-                except Exception as e:
-                    # Keep raw if parsing fails
-                    normalized.append(p)
-            return normalized
-        except Exception as e:
-            import logging
-            logging.getLogger("ariax").warning(f"positions parse failed: {e}")
             return []
 
     def open_orders(self, currency: str = "USDT") -> List[dict]:
@@ -401,108 +383,21 @@ class AriaXClient:
         except:
             return {}
 
-    # Trading - v016 FIX: No 50% hack, real floor with 0.999 safety
     def _place_order(self, symbol: str, side: str, qty: float, order_type: str = "market", price: Optional[float] = None, reduce_only: bool = False, label: str = "") -> dict:
-        # v016 FIX: No 50% forced reduction - use real qty with floor
-        # Safety: 0.999 already applied in execution.py plan_rebalance
         body = {
             "symbol": symbol.replace("USDT", "USD") if symbol.endswith("USDT") else symbol,
             "side": side,
-            "type": order_type,
             "qty": qty,
-            "lev": 5
+            "type": order_type,
+            "reduce_only": reduce_only,
         }
-        if price is not None and order_type == "limit":
+        if price is not None:
             body["price"] = price
+        if label:
+            body["label"] = label
         
-        data = self._request("POST", "/api/order", json_body=body, use_v5=False)
-        return data
-
-    def limit_ioc(self, instrument: str, direction: str, amount: float, price: float, label: str, reduce_only: bool = False) -> dict:
-        legacy_sym = instrument.replace("USDT", "USD") if instrument.endswith("USDT") else instrument
         try:
-            return self._place_order(legacy_sym, direction, amount, "limit", price, reduce_only=reduce_only, label=label)
-        except AriaXAPIError as exc:
-            if "qty exceeds" in str(exc).lower() and reduce_only:
-                log.warning(f"limit_ioc qty exceeds with reduceOnly, retrying without flag for {instrument}")
-                return self._place_order(legacy_sym, direction, amount, "limit", price, reduce_only=False, label=label)
-            raise
-
-    def buy_market(self, instrument: str, amount: float, label: str = "zenith", reduce_only: bool = False) -> dict:
-        legacy_sym = instrument.replace("USDT", "USD") if instrument.endswith("USDT") else instrument
-        try:
-            return self._place_order(legacy_sym, "buy", amount, "market", reduce_only=reduce_only, label=label)
-        except AriaXAPIError as exc:
-            if "qty exceeds" in str(exc).lower() and reduce_only:
-                return self._place_order(legacy_sym, "buy", amount, "market", reduce_only=False, label=label)
-            raise
-
-    def sell_market(self, instrument: str, amount: float, label: str = "zenith", reduce_only: bool = False) -> dict:
-        legacy_sym = instrument.replace("USDT", "USD") if instrument.endswith("USDT") else instrument
-        try:
-            return self._place_order(legacy_sym, "sell", amount, "market", reduce_only=reduce_only, label=label)
-        except AriaXAPIError as exc:
-            if "qty exceeds" in str(exc).lower() and reduce_only:
-                return self._place_order(legacy_sym, "sell", amount, "market", reduce_only=False, label=label)
-            raise
-
-    def close_position(self, instrument: str) -> dict:
-        """
-        v016 FIX ROOT: Always fetch LIVE position from exchange (not cached state)
-        and close with exact floored size + 0.999 safety, not 50% hack.
-        Retry gradually 95% if qty exceeds.
-        """
-        try:
-            # Step 1: LIVE fetch (not cached)
-            pos = self.positions()
-            target_pos = None
-            for p in pos:
-                if p.get("instrument_name") == instrument:
-                    target_pos = p
-                    break
-            
-            if not target_pos:
-                raise AriaXAPIError("close_position", -1, "position not found")
-            
-            size = float(target_pos.get("size_currency") or target_pos.get("size") or 0)
-            direction = target_pos.get("direction", "")
-            if abs(size) <= 0:
-                return {"ok": True, "message": "no position to close"}
-            
-            # Step 2: Get step size and floor with 0.999 safety (never round up)
-            meta = self.instrument(instrument)
-            step = float(meta.get("contract_size") or 0.001)
-            
-            from app.execution_v016 import floor_amount
-            safe_size = floor_amount(abs(size) * 0.999, step)
-            
-            if safe_size <= 0:
-                return {"ok": True, "message": "position below minimum, already effectively closed"}
-            
-            # Step 3: Try full close (not 50%)
-            try:
-                if direction.lower() in ("buy", "long"):
-                    return self.sell_market(instrument, safe_size, label=f"close_{instrument.lower()}", reduce_only=True)
-                else:
-                    return self.buy_market(instrument, safe_size, label=f"close_{instrument.lower()}", reduce_only=True)
-            except AriaXAPIError as exc:
-                if "qty exceeds" in str(exc).lower():
-                    # Step 4: Real fallback - gradual 95% retry, not random 50%
-                    retry_size = safe_size
-                    for attempt in range(5):
-                        retry_size = floor_amount(retry_size * 0.95, step)
-                        if retry_size <= 0:
-                            break
-                        try:
-                            if direction.lower() in ("buy", "long"):
-                                return self.sell_market(instrument, retry_size, label=f"close_retry_{instrument.lower()}", reduce_only=True)
-                            else:
-                                return self.buy_market(instrument, retry_size, label=f"close_retry_{instrument.lower()}", reduce_only=True)
-                        except AriaXAPIError:
-                            continue
-                    raise AriaXAPIError("close_position", -1, f"failed to close after 5 retries, size={safe_size}")
-                raise
-        except Exception as exc:
-            if isinstance(exc, AriaXAPIError):
-                raise
-            raise AriaXAPIError("close_position", -1, str(exc))
+            data = self._request("POST", "/api/order", json_body=body, use_v5=False)
+            return data
+        except Exception as e:
+            raise e
