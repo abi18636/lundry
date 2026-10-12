@@ -1,5 +1,5 @@
 """
-v018 FIXED5 - ABSOLUTE FORCE 10 pairs, 7 sleeves
+v018 FIXED6 - ABSOLUTE FORCE 10 pairs, 7 sleeves
 Fixes Render dashboard env var with 25 assets
 """
 from __future__ import annotations
@@ -44,8 +44,8 @@ class Settings(BaseSettings):
     use_take_profit: bool = True
     sl_tp_enabled: bool = True
     confluence_enabled: bool = True
-    confluence_min_agreement: int = 3
-    confluence_min_confidence: float = 0.55
+    confluence_min_agreement: int = 2
+    confluence_min_confidence: float = 0.50
     vol_targeting_enabled: bool = True
     target_vol_annual: float = 0.40
     correlation_enabled: bool = True
@@ -61,9 +61,9 @@ class Settings(BaseSettings):
     meta_min_weight: float = 0.03
     meta_max_weight: float = 0.35
     cost_filter_enabled: bool = True
-    fee_bps: float = 10.0
-    slippage_bps: float = 15.0
-    min_edge_bps: float = 5.0
+    fee_bps: float = 5.0
+    slippage_bps: float = 10.0
+    min_edge_bps: float = 2.0
     regime_filter_enabled: bool = True
     adx_trending_threshold: float = 25.0
     adx_ranging_threshold: float = 20.0
@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
     telegram_bot_username: str = "TestTraid_bot"
     report_timezone: str = "Europe/Istanbul"
-    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED5"
+    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED6-TRADING"
 
     @property
     def effective_capital(self) -> float:

@@ -220,19 +220,33 @@ class AriaXClient:
     def account_summary(self, currency: str = "USDT") -> dict:
         try:
             data = self._request("GET", "/api/wallet", use_v5=False)
-            if data.get("ok"):
-                d = data.get("data", {})
+            if isinstance(data, dict) and "balances" in data:
+                # New format: balances.USDT, futures.balances.USDT, equity, free_margin
+                spot_bal = data.get("balances", {}).get("USDT", 0)
+                fut_bal = data.get("futures", {}).get("balances", {}).get("USDT", 0)
+                equity = data.get("equity") or (spot_bal + fut_bal)
+                free = data.get("free_margin") or fut_bal
                 return {
-                    "USDT": {
-                        "equity": float(d.get("equity") or d.get("balance") or 0),
-                        "available": float(d.get("available") or d.get("free") or 0),
-                        "balance": float(d.get("balance") or 0),
+                    currency: {
+                        "equity": float(equity),
+                        "available": float(free),
+                        "balance": float(fut_bal or spot_bal),
                     }
                 }
-            return {"USDT": {"equity": 0, "available": 0, "balance": 0}}
-        except:
-            return {"USDT": {"equity": 0, "available": 0, "balance": 0}}
-
+            # Fallback old format
+            for key in ("USDT", currency, "USDC"):
+                d = data.get(key) or {}
+                if d:
+                    return {
+                        currency: {
+                            "equity": float(d.get("equity") or d.get("balance") or 0),
+                            "available": float(d.get("available") or d.get("free") or d.get("balance") or 0),
+                            "balance": float(d.get("balance") or 0),
+                        }
+                    }
+            return {currency: {"equity": 0, "available": 0, "balance": 0}}
+        except Exception:
+            return {currency: {"equity": 0, "available": 0, "balance": 0}}
     def positions(self, currency: str = "USDT") -> List[dict]:
         try:
             data = self._request("GET", "/api/positions", use_v5=False)
