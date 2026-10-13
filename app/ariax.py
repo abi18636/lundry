@@ -303,6 +303,48 @@ class AriaXClient:
         except:
             return {}
 
+
+    def close_position(self, symbol: str) -> dict:
+        """Close position by placing opposite reduce_only order"""
+        try:
+            # Get current positions
+            positions = self.positions("USDT")
+            target_pos = None
+            for p in positions:
+                inst = p.get("instrument_name", "")
+                if inst == symbol or inst.replace("USDT","") == symbol.replace("USDT","").replace("USD",""):
+                    target_pos = p
+                    break
+                # Also try without USDT
+                if symbol.replace("USDT","").upper() in inst.upper():
+                    target_pos = p
+                    break
+            
+            if not target_pos:
+                # Try direct symbol match with USD variant
+                for p in positions:
+                    if p.get("symbol","").upper() == symbol.replace("USDT","USD").upper() or p.get("instrument_name","").upper() == symbol.upper():
+                        target_pos = p
+                        break
+            
+            if not target_pos:
+                return {"ok": False, "error": f"No position found for {symbol}", "positions": len(positions)}
+            
+            size = float(target_pos.get("size") or target_pos.get("size_currency") or 0)
+            if abs(size) < 1e-9:
+                return {"ok": False, "error": f"Position size 0 for {symbol}"}
+            
+            # Opposite side
+            side = "sell" if size > 0 else "buy"
+            qty = abs(size) * 0.999  # 0.999 safety to avoid qty exceeds
+            
+            # Place reduce_only market order
+            result = self._place_order(symbol, side, qty, order_type="market", reduce_only=True, label=f"close_{symbol}")
+            return {"ok": True, "symbol": symbol, "side": side, "qty": qty, "result": result, "closed_size": size}
+        except Exception as e:
+            import traceback
+            return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:500]}
+
     def _place_order(self, symbol: str, side: str, qty: float, order_type: str = "market", price: Optional[float] = None, reduce_only: bool = False, label: str = "") -> dict:
         body = {
             "symbol": symbol.replace("USDT", "USD") if symbol.endswith("USDT") else symbol,
