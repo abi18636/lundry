@@ -345,7 +345,7 @@ class TradingEngine:
         levels = self.state.position_sl_tp.get(asset)
         if not levels or not levels.get("sl"):
             return None
-        # FIXED37: Use smart triggers if available
+        # FIXED38: Use smart triggers if available
         if levels.get("tp1") is not None:  # smart ladder
             result = check_smart_triggers(asset, current_price, levels)
             if result:
@@ -445,11 +445,14 @@ class TradingEngine:
             self.state.push("warning", f"positions fetch failed: {exc}")
         
         inventory = {}
+        self._last_inventory = {}
         for p in positions:
             try:
                 inst = p.get("instrument_name")
                 if inst:
-                    inventory[inst] = signed_position(p)
+                    qty = signed_position(p)
+                    inventory[inst] = qty
+                    self._last_inventory[inst] = qty
             except:
                 continue
         
@@ -567,6 +570,29 @@ class TradingEngine:
             })
         self.state.net_book = net_book
         
+        # FIXED38: Auto-register SMART TP/SL for existing positions without SL/TP
+        try:
+            for inst, qty in inventory.items():
+                if abs(qty) < 1e-9:
+                    continue
+                asset = inst.replace("USDT","")
+                if asset not in self.state.position_sl_tp:
+                    df = frames.get(asset)
+                    if df is not None and len(df) > 20:
+                        avg_price = 0
+                        for p in positions:
+                            if p.get("instrument_name") == inst:
+                                avg_price = float(p.get("average_price") or 0)
+                                break
+                        if avg_price > 0:
+                            side = 1 if qty > 0 else -1
+                            levels = self._calculate_atr_levels(df, avg_price, side)
+                            if levels.get("sl") is not None:
+                                self.state.position_sl_tp[asset] = {**levels, "side": side, "entry_price": avg_price}
+                                self.state.push("info", f"SMART TP/SL auto-registered for existing {asset}: Entry={avg_price:.4f} SL={levels.get('sl'):.4f} TP1={levels.get('tp1'):.4f} TP2={levels.get('tp2'):.4f} TP3={levels.get('tp3'):.4f}")
+        except Exception as e:
+            pass
+
         # SL/TP + Smart exit
         sl_tp_overrides = {}
         for asset in filtered_list:
@@ -585,7 +611,7 @@ class TradingEngine:
                 sl_tp_overrides[asset] = trigger
                 net_book[asset] = {**b, "target_coin": 0.0, "_sl_tp_override": trigger}
                 continue
-            # FIXED37 SMART TP/SL LADDER
+            # FIXED38 SMART TP/SL LADDER
             try:
                 pos_state = self.state.position_sl_tp.get(asset)
                 if pos_state:
@@ -885,8 +911,38 @@ class TradingEngine:
                         if entry_price > 0:
                             side = 1 if action.get("direction") == "buy" else -1
                             levels = self._calculate_atr_levels(df, entry_price, side)
-                            self.state.position_sl_tp[asset] = {**levels, "side": side, "entry_price": entry_price}
+                            if levels.get("sl") is not None:
+                                self.state.position_sl_tp[asset] = {**levels, "side": side, "entry_price": entry_price}
+                                self.state.push("info", f"SMART TP/SL registered for {asset}: SL={levels.get('sl'):.4f} TP1={levels.get('tp1'):.4f} TP2={levels.get('tp2'):.4f}")
         except:
+            pass
+        # FIXED38: Also initialize SL/TP for existing positions that don't have it
+        try:
+            for asset in list(self.state.position_sl_tp.keys()):
+                if asset not in self._candle_cache:
+                    continue
+            # Check inventory for missing SL/TP
+            for inst, qty in getattr(self, '_last_inventory', {}).items():
+                if abs(qty) < 1e-9:
+                    continue
+                # Find asset from instrument
+                asset = inst.replace("USDT","")
+                if asset not in self.state.position_sl_tp:
+                    df = self._candle_cache.get(asset, (0, None))[1] if asset in self._candle_cache else None
+                    if df is not None and len(df) > 20:
+                        # Find position avg price
+                        avg_price = 0
+                        for p in self.state.positions:
+                            if p.get("instrument_name") == inst:
+                                avg_price = float(p.get("average_price") or 0)
+                                break
+                        if avg_price > 0:
+                            side = 1 if qty > 0 else -1
+                            levels = self._calculate_atr_levels(df, avg_price, side)
+                            if levels.get("sl") is not None:
+                                self.state.position_sl_tp[asset] = {**levels, "side": side, "entry_price": avg_price}
+                                self.state.push("info", f"SMART TP/SL auto-registered for existing {asset}: SL={levels.get('sl'):.4f} TP1={levels.get('tp1'):.4f}")
+        except Exception as e:
             pass
         entry = {"ts": self.state.last_fill_at, **{k: action.get(k) for k in ("asset", "instrument", "status", "amount", "price", "notional_usd", "order_id")}}
         self.state.orders_log = (self.state.orders_log + [entry])[-300:]

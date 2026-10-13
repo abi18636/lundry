@@ -1,5 +1,5 @@
 """
-v018 FIXED37-SMART-TPSL-LADDER"""
+v018 FIXED38-SMART-TPSL-LADDER"""
 from __future__ import annotations
 from functools import lru_cache
 from typing import List
@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     breakeven_atr: float = 1.0
     partial_take_atr: float = 2.0
     partial_take_fraction: float = 0.5
-    # FIXED37 SMART TP/SL LADDER
+    # FIXED38 SMART TP/SL LADDER
     smart_tp_sl_enabled: bool = True
     smart_sl_atr: float = 2.0
     smart_tp1_atr: float = 1.5
@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
     telegram_bot_username: str = "TestTraid_bot"
     report_timezone: str = "Europe/Istanbul"
-    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED37-SMART-TPSL-LADDER"
+    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED38-SMART-TPSL-LADDER"
 
     @property
     def effective_capital(self) -> float:
