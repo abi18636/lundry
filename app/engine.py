@@ -33,6 +33,7 @@ from app.confluence import apply_confluence_filter, estimate_signal_edge_bps, sh
 from app.volatility_targeting import volatility_targeted_size, calculate_atr
 from app.correlation import calculate_effective_exposure, apply_correlation_cap
 from app.exit_manager import manage_position_exit
+from app.smart_tp_sl import calculate_smart_levels, manage_smart_exit, check_smart_triggers
 from app.meta_allocator import PerformanceTracker, compute_dynamic_weights, compute_dynamic_weights_simple
 
 log = logging.getLogger("engine")
@@ -344,6 +345,25 @@ class TradingEngine:
         levels = self.state.position_sl_tp.get(asset)
         if not levels or not levels.get("sl"):
             return None
+        # FIXED37: Use smart triggers if available
+        if levels.get("tp1") is not None:  # smart ladder
+            result = check_smart_triggers(asset, current_price, levels)
+            if result:
+                return result
+        # Fallback old logic
+        side = levels.get("side", 0)
+        sl, tp = levels.get("sl"), levels.get("tp")
+        if side > 0:
+            if current_price <= sl:
+                return f"stop_loss SL={sl:.4f}"
+            if tp and current_price >= tp:
+                return f"take_profit TP={tp:.4f}"
+        elif side < 0:
+            if current_price >= sl:
+                return f"stop_loss SL={sl:.4f}"
+            if tp and current_price <= tp:
+                return f"take_profit TP={tp:.4f}"
+        return None
         side = levels.get("side", 0)
         sl, tp = levels.get("sl"), levels.get("tp")
         if side > 0:
@@ -565,19 +585,47 @@ class TradingEngine:
                 sl_tp_overrides[asset] = trigger
                 net_book[asset] = {**b, "target_coin": 0.0, "_sl_tp_override": trigger}
                 continue
-            if s.smart_exit_enabled:
-                try:
-                    pos_state = self.state.position_sl_tp.get(asset)
-                    if pos_state:
-                        atr = pos_state.get("atr") or calculate_atr(frames.get(asset)) if asset in frames else 0
-                        if atr > 0:
+            # FIXED37 SMART TP/SL LADDER
+            try:
+                pos_state = self.state.position_sl_tp.get(asset)
+                if pos_state:
+                    atr = pos_state.get("atr") or (calculate_atr(frames.get(asset)) if asset in frames else 0)
+                    if atr > 0:
+                        # Use smart ladder if enabled
+                        if getattr(s, 'smart_tp_sl_enabled', False) and pos_state.get("tp1") is not None:
+                            cfg = {
+                                'sl_atr': getattr(s, 'smart_sl_atr', 2.0),
+                                'tp1_atr': getattr(s, 'smart_tp1_atr', 1.5),
+                                'tp2_atr': getattr(s, 'smart_tp2_atr', 3.0),
+                                'tp3_atr': getattr(s, 'smart_tp3_atr', 5.0),
+                                'tp4_atr': getattr(s, 'smart_tp4_atr', 8.0),
+                                'trailing_atr': getattr(s, 'smart_trailing_atr', 1.5),
+                            }
+                            exit_actions = manage_smart_exit(asset, px, pos_state, atr, cfg)
+                            # Update state with new SL/TP and level
+                            if exit_actions.get("new_sl") != pos_state.get("sl") or exit_actions.get("new_tp") != pos_state.get("tp"):
+                                pos_state["sl"] = exit_actions["new_sl"]
+                                pos_state["tp"] = exit_actions["new_tp"]
+                                pos_state["level"] = exit_actions.get("level", pos_state.get("level",0))
+                                pos_state["breakeven_moved"] = exit_actions.get("breakeven_moved", False)
+                                pos_state["tp1_hit"] = exit_actions.get("tp1_hit", False)
+                                pos_state["tp2_hit"] = exit_actions.get("tp2_hit", False)
+                                pos_state["tp3_hit"] = exit_actions.get("tp3_hit", False)
+                                pos_state["partial_taken"] = exit_actions.get("partial_taken", 0.0)
+                                pos_state["highest_profit_atr"] = exit_actions.get("highest_profit_atr", 0.0)
+                                pos_state["trailing_active"] = exit_actions.get("trailing_active", False)
+                                if exit_actions.get("reason"):
+                                    self.state.push("info", f"SMART TP/SL {asset} Level {exit_actions.get('level')}: {exit_actions.get('reason')}")
+                                    log.info(f"SMART TP/SL {asset}: {exit_actions.get('reason')}")
+                        elif s.smart_exit_enabled:
+                            # Fallback old exit manager
                             exit_actions = manage_position_exit(asset, px, pos_state, atr)
                             if exit_actions.get("new_sl") != pos_state.get("sl"):
                                 pos_state["sl"] = exit_actions["new_sl"]
                                 pos_state["breakeven_moved"] = exit_actions.get("breakeven_moved", False)
                                 pos_state["partial_taken"] = exit_actions.get("partial_taken", False)
-                except:
-                    pass
+            except Exception as e:
+                log.warning(f"Smart exit failed for {asset}: {e}")
         
         risk = self.state.risk
         latched = bool(risk.get("drawdown_latched"))

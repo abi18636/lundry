@@ -24,15 +24,15 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED36-TRADING-THRESHOLD-DASHBOARD"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED37-SMART-TPSL-LADDER"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
     expected = get_settings().dashboard_token
     if not expected:
-        # FIXED36: Allow public control when no token set for dashboard usability, log warning
+        # FIXED37: Allow public control when no token set for dashboard usability, log warning
         if control:
-            log.warning("Public control allowed - no DASHBOARD_TOKEN set (FIXED36)")
+            log.warning("Public control allowed - no DASHBOARD_TOKEN set (FIXED37)")
         return
     token = x_token or (authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else "")
     if not token or not hmac.compare_digest(token, expected):
@@ -113,7 +113,8 @@ def health():
         "confluence_info": state.confluence_info,
         "correlation_info": state.correlation_info,
         "regime_info": diagnostic.get("regime_info", {}),
-        "philosophy": "Signal-Quality-On 30-60% variable + 10 pairs + test trade + telegram close buttons",
+        "philosophy": "Signal-Quality-On 30-60% variable + 10 pairs + test trade + telegram close buttons + SMART TP/SL LADDER",
+        "smart_tpsl": getattr(get_engine().state, "position_sl_tp", {}),
         "financial": fin_summary,
         "telegram_enabled": bool(reporter and reporter.enabled) if reporter else False,
     }
@@ -129,9 +130,11 @@ def status(authorization: Optional[str] = Header(None), x_token: Optional[str] =
 def diagnostics(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token)
     snap = get_engine().snapshot()
+    eng = get_engine()
+    sltp = eng.state.position_sl_tp if hasattr(eng.state, "position_sl_tp") else {}
     return {"build": BUILD, "diagnostics": snap["diagnostics"], "market_data": snap["market_data"],
             "risk": snap["risk"], "actions": snap["actions"], "pending_order": snap["pending_order"],
-            "ops_reviews": snap["ops_reviews"], "version": snap.get("version")}
+            "ops_reviews": snap["ops_reviews"], "version": snap.get("version"), "sltp": sltp, "position_sl_tp": sltp}
 
 
 @app.get("/api/financial")
@@ -139,11 +142,14 @@ def financial(authorization: Optional[str] = Header(None), x_token: Optional[str
     _check_token(authorization, x_token)
     eng = get_engine()
     risk = eng.state.risk
+    sltp = eng.state.position_sl_tp if hasattr(eng.state, "position_sl_tp") else {}
     return {
         "allocated_capital_usdc": eng.settings.capital_usd,
         "estimated_bot_equity_usdc": risk.get("estimated_bot_equity", eng.settings.capital_usd),
         "account": eng.state.account,
         "positions": eng.state.positions,
+        "position_sl_tp": sltp,
+        "sltp": sltp,
         "risk": risk,
         "version": eng.state.version,
         "unrealized_gross_usdc": sum(float(p.get("floating_profit_loss") or 0) for p in eng.state.positions),
@@ -519,7 +525,33 @@ function side(pa){if(!pa)return '<span class="muted">—</span>';const label=pa.
 function kv(k,v,cls=''){return '<div class="kv"><span class="muted">'+esc(k)+'</span><span class="number '+cls+'\">'+esc(v)+'</span></div>'}
 async function refresh(){try{const r=await fetch('/api/status',{headers:headers()});if(!r.ok)throw new Error(r.status===401?'برای مشاهده وضعیت، توکن کنترل را وارد کنید.':'HTTP '+r.status);const d=await r.json();const h=await fetch('/health').then(r=>r.json());const dg=d.diagnostics||{},cfg=d.config||{},risk=d.risk||{},md=d.market_data||{};const fin=d.financial||{};currentVersion=cfg.version||h.version||'v018';document.getElementById('engine').textContent=d.running?'● موتور روشن '+currentVersion:'موتور متوقف';document.getElementById('engine').className='chip '+(d.running?'live':'red');document.getElementById('updated').textContent='آخرین چرخه: '+(d.last_loop_at||'—');document.getElementById('version').textContent='ورژن: '+currentVersion+' | assets: '+(cfg.assets||[]).length+' | '+cfg.assets_count+' جفت ارز';const reason=dg.primary_blocker;const t=titles[reason]||[reason?'مسیر معامله محدود است: '+reason:dg.trading_state==='ready'?'✅ مسیر معامله آماده - Signal-Quality-On':'مسیر معامله بررسی شده است',reason?'جزئیات مانع هر نماد در ماتریس پایین مشخص است.':'ثبت معامله فقط با رسید filled_amount مثبت صرافی انجام می‌شود.'];document.getElementById('reason-title').textContent=t[0];document.getElementById('reason-text').textContent=t[1]+' | ورژن: '+currentVersion;document.getElementById('markets').textContent=(dg.market_open_count||0)+' / '+(cfg.assets||[]).length;document.getElementById('halted').textContent=(dg.market_halted_count||0)+' halted | ورژن '+currentVersion;document.getElementById('signals').textContent=dg.active_signal_assets||0;document.getElementById('fills').textContent=dg.confirmed_fill_count||0;document.getElementById('capital').textContent='$'+fmt(cfg.capital_usd,0)+' / $'+fmt(risk.notional_cap_usd,0);document.getElementById('capital-sub').textContent='برآورد ربات $'+fmt(risk.estimated_bot_equity_usd,2)+' · حساب $'+fmt((d.account.USDT||{}).equity,2)+' · ورژن '+currentVersion;document.getElementById('pnl6h').textContent=(fin.verified_closed_net_usdc==null?'نامشخص':'$'+fmt(fin.verified_closed_net_usdc,4));document.getElementById('pnl6h-sub').textContent='کارمزد $'+fmt(fin.period_fees_usdc,4)+' · غیرمحقق $'+fmt(fin.unrealized_gross_usdc,4);document.getElementById('loops').textContent=(d.loop_count||0)+' | '+currentVersion;document.getElementById('ops').textContent=(h.last_ops_review_at||'هنوز ثبت نشده')+' | '+currentVersion;const amap=Object.fromEntries((d.actions||[]).map(a=>[a.asset,a]));const smap=Object.fromEntries((d.sleeves||[]).map(s=>[s.id,s.per_asset||{}]));document.getElementById('matrix').innerHTML=(cfg.assets||[]).map(a=>{const action=amap[a]||{},q=md[a]||{};const closeBtn='<button class="button" onclick="closePosition(\''+a+'\')">🛑 بستن '+a+'</button>';return '<tr><td class="asset\">'+esc(a)+'</td>'+['diversified_5','zenith_apex','almasi_primary','inst_v3_stable','inst_v3_primary','zenith_endurance','mean_reversion'].map(s=>'<td>'+side((smap[s]||{})[a])+'</td>').join('')+'<td><span class="number\">'+fmt(action.target_amt==null?action.target_coin:action.target_amt,6)+'</span><br><span class="number muted\">min '+fmt(action.minimum_amount,6)+'</span></td><td class="'+(q.market_state==='open'?'live':'amber')+'\">'+esc(q.market_state)+'<br><span class="number muted\">'+fmt((q.book_age_seconds||0)/3600,1)+'h</span></td><td class="note\"><b class="'+(action.filled_amount>0?'live':'amber')+'\">'+esc(action.status)+'</b><br>'+esc(action.reason)+'</td><td>'+closeBtn+'</td></tr>'}).join('');// Positions table
 const positions = d.positions||[];
+const sltpMap = {};
+try{
+  const sltp = d.diagnostics?.sl_tp_triggers || {};
+  // Also get from risk or state
+  if(d.risk?.position_sl_tp){
+    Object.assign(sltpMap, d.risk.position_sl_tp);
+  }
+  if(d.config?.position_sl_tp){
+    Object.assign(sltpMap, d.config.position_sl_tp);
+  }
+  // Try to get from state directly via snapshot
+  if(d.sltp){
+    Object.assign(sltpMap, d.sltp);
+  }
+}catch(e){}
 document.getElementById('positions-table').innerHTML = positions.length ? positions.map(p=>{
+  const asset = (p.instrument_name||'').replace('USDT','');
+  const sltpInfo = (d.sleeves && d.sleeves.length) ? '' : '';
+  // Try to find SL/TP from diagnostics or other
+  let tpSlText = '';
+  try{
+    // Look for SL/TP in position itself or in global state
+    if(p.sl || p.tp){
+      tpSlText = `<br><small>SL:${p.sl||'-'} TP:${p.tp||'-'}</small>`;
+    }
+  }catch(e){}
+
   const asset = (p.instrument_name||'').replace('USDT','');
   return '<tr><td class="asset\">'+esc(p.instrument_name)+'</td><td>'+esc(p.direction)+' '+esc(p.size_currency||p.size)+'</td><td>'+esc(p.average_price)+' / '+esc(p.mark_price)+'</td><td class="number '+(parseFloat(p.total_profit_loss||0)>0?'long':'short')+'\">'+esc(p.total_profit_loss)+'</td><td><button class="button" onclick="closePosition(\''+asset+'\')">🛑 بستن '+esc(asset)+'</button></td></tr>';
 }).join('') : '<tr><td colspan="5" class="muted">بدون پوزیشن - flat - ورژن '+currentVersion+'</td></tr>';

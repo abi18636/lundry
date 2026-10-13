@@ -1,5 +1,5 @@
 """
-v018 FIXED36-TRADING-THRESHOLD-DASHBOARD"""
+v018 FIXED37-SMART-TPSL-LADDER"""
 from __future__ import annotations
 from functools import lru_cache
 from typing import List
@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     breakeven_atr: float = 1.0
     partial_take_atr: float = 2.0
     partial_take_fraction: float = 0.5
+    smart_tp_sl_enabled: bool = True
+    smart_sl_atr: float = 2.0
+    smart_tp1_atr: float = 1.5
+    smart_tp2_atr: float = 3.0
+    smart_tp3_atr: float = 5.0
+    smart_tp4_atr: float = 8.0
+    smart_trailing_atr: float = 1.5
+    smart_tp1_close_pct: float = 0.30
+    smart_tp2_close_pct: float = 0.30
+    smart_tp3_close_pct: float = 0.15
+    smart_breakeven_atr: float = 1.0
     meta_allocator_enabled: bool = True
     meta_lookback_trades: int = 20
     meta_min_weight: float = 0.03
@@ -79,7 +90,7 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
     telegram_bot_username: str = "TestTraid_bot"
     report_timezone: str = "Europe/Istanbul"
-    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED36-TRADING-THRESHOLD-DASHBOARD"
+    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED37-SMART-TPSL-LADDER"
 
     @property
     def effective_capital(self) -> float:
