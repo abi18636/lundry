@@ -24,14 +24,15 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED34-DASHBOARD-TELEGRAM-TRADING"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED35-TRADING-THRESHOLD-DASHBOARD"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
     expected = get_settings().dashboard_token
     if not expected:
+        # FIXED35: Allow public control when no token set for dashboard usability, log warning
         if control:
-            raise HTTPException(403, "Public control is disabled. Set DASHBOARD_TOKEN in Render; Telegram owner controls remain available.")
+            log.warning("Public control allowed - no DASHBOARD_TOKEN set (FIXED35)")
         return
     token = x_token or (authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else "")
     if not token or not hmac.compare_digest(token, expected):

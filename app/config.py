@@ -1,5 +1,5 @@
 """
-v018 FIXED34-DASHBOARD-TELEGRAM-TRADING"""
+v018 FIXED35-TRADING-THRESHOLD-DASHBOARD"""
 from __future__ import annotations
 from functools import lru_cache
 from typing import List
@@ -18,16 +18,16 @@ class Settings(BaseSettings):
     ariax_fallback_url: str = Field(default="https://dryclean-app-1.onrender.com")
     trading_enabled: bool = True
     dry_run: bool = False
-    capital_usd: float = Field(default=200.0, gt=0)
+    capital_usd: float = Field(default=400.0, gt=0)
     lev_cap: float = Field(default=2.0, gt=0, le=5.0)
     long_only: bool = False
     assets: str = "BTC,ETH,SOL,AVAX,LINK,XRP,DOGE,ADA,DOT,LTC"
     sleeve_weights: str = "diversified_5:0.15,zenith_apex:0.15,almasi_primary:0.15,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.10,mean_reversion:0.20"
     sleeves_enabled: str = "diversified_5,zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance,mean_reversion"
-    loop_seconds: int = 60
+    loop_seconds: int = 90
     max_notional_usd: float = 200.0
     min_notional_usd: float = 5.0
-    rebalance_notional_usd: float = 1.0
+    rebalance_notional_usd: float = 6.0
     max_drawdown_pct: float = 0.15
     max_spread_bps: float = 200.0
     max_slippage_bps: float = 100.0
@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
     telegram_bot_username: str = "TestTraid_bot"
     report_timezone: str = "Europe/Istanbul"
-    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED34-DASHBOARD-TELEGRAM-TRADING"
+    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED35-TRADING-THRESHOLD-DASHBOARD"
 
     @property
     def effective_capital(self) -> float:
