@@ -31,3 +31,4 @@ python-dotenv==1.0.1
 # force rebuild FIXED30 IMPORT Mon Oct 12 21:04:52 UTC 2026
 # force rebuild FIXED31 FINAL Mon Oct 12 21:06:39 UTC 2026
 # force rebuild FIXED32 SETTINGS Tue Oct 13 06:44:11 UTC 2026
+# force rebuild FIXED33 TELEGRAM Tue Oct 13 06:46:03 UTC 2026
