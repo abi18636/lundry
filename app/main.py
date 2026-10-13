@@ -24,7 +24,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED31-FINAL-FULL"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED32-SETTINGS-DEBUG"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
@@ -324,6 +324,59 @@ def debug_positions(authorization: Optional[str] = Header(None), x_token: Option
     except Exception as e:
         import traceback
         return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}
+
+
+
+
+@app.get("/api/debug/settings")
+def debug_settings(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    s = get_settings()
+    return {
+        "version": s.version,
+        "assets": s.asset_list,
+        "capital": s.capital_usd,
+        "trading_enabled": s.trading_enabled,
+        "telegram_enabled": s.telegram_enabled,
+        "telegram_has_token": bool(s.telegram_bot_token),
+        "telegram_token_len": len(s.telegram_bot_token) if s.telegram_bot_token else 0,
+        "telegram_has_chat_id": bool(s.telegram_chat_id),
+        "telegram_chat_id": s.telegram_chat_id[:10] + "..." if s.telegram_chat_id else "",
+        "telegram_username": s.telegram_bot_username,
+        "dashboard_has_token": bool(s.dashboard_token),
+        "dashboard_token_len": len(s.dashboard_token) if s.dashboard_token else 0,
+        "rebalance_threshold": s.rebalance_notional_usd,
+        "loop_seconds": s.loop_seconds,
+        "build": BUILD,
+    }
+
+@app.get("/api/debug/telegram")
+def debug_telegram(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    eng = get_engine()
+    reporter = None
+    try:
+        from app.telegram_bot import get_reporter
+        reporter = get_reporter()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    
+    if not reporter:
+        return {"ok": False, "error": "no reporter"}
+    
+    return {
+        "ok": True,
+        "enabled": reporter.enabled,
+        "has_token": bool(reporter.bot_token),
+        "has_chat_id": bool(reporter.chat_id),
+        "chat_id_preview": reporter.chat_id[:10] + "..." if reporter.chat_id else "",
+        "poll_commands": reporter.poll_commands,
+        "stats": reporter.stats,
+        "journal_len": len(reporter.journal),
+        "last_journal": reporter.journal[-3:] if reporter.journal else [],
+        "build": BUILD,
+        "version": eng.state.version,
+    }
 
 
 
