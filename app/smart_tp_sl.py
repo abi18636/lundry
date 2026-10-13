@@ -1,5 +1,5 @@
 """
-v018 FIXED38 SMART TP/SL LADDER
+v018 FIXED39 SMART TP/SL LADDER
 هوشمند پله‌ای:
 - ثبت TP/SL در معاملات
 - TP هوشمند با سطوح چندگانه

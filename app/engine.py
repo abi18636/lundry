@@ -323,21 +323,39 @@ class TradingEngine:
             out["errors"].append({"stage": "candles", "error": str(exc)})
         return out
 
-    def _calculate_atr_levels(self, df, entry_price: float, side: float) -> dict:
-        s = self.settings
+    def _calculate_atr_levels(self, df, entry_price: float, side: int) -> dict:
         try:
-            high = df["high"].astype(float)
-            low = df["low"].astype(float)
-            close = df["close"].astype(float)
-            tr = pd.concat([(high - low), (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
-            atr = float(tr.rolling(14).mean().iloc[-1])
+            from app.volatility_targeting import calculate_atr
+            from app.smart_tp_sl import calculate_smart_levels
+            atr = calculate_atr(df, 14)
+            if atr <= 0 or entry_price <= 0 or side == 0:
+                return {"sl": None, "tp": None, "atr": None}
+            s = self.settings
+            # FIXED39 SMART LADDER
+            if getattr(s, 'smart_tp_sl_enabled', True):
+                cfg = {
+                    'sl_atr': getattr(s, 'smart_sl_atr', 2.0),
+                    'tp1_atr': getattr(s, 'smart_tp1_atr', 1.5),
+                    'tp2_atr': getattr(s, 'smart_tp2_atr', 3.0),
+                    'tp3_atr': getattr(s, 'smart_tp3_atr', 5.0),
+                    'tp4_atr': getattr(s, 'smart_tp4_atr', 8.0),
+                    'trailing_atr': getattr(s, 'smart_trailing_atr', 1.5),
+                }
+                smart = calculate_smart_levels(entry_price, side, atr, cfg)
+                if smart and smart.get('sl') is not None:
+                    return smart
+            # Fallback old
             if side > 0:
                 sl = entry_price - atr * s.atr_stop_mult
                 tp = entry_price + atr * s.atr_tp_mult
             else:
                 sl = entry_price + atr * s.atr_stop_mult
                 tp = entry_price - atr * s.atr_tp_mult
-            return {"sl": sl, "tp": tp, "atr": atr}
+            return {"sl": sl, "tp": tp, "atr": atr, "entry_price": entry_price, "side": side, "tp1": tp, "tp2": tp, "tp3": tp, "level": 0}
+        except Exception as e:
+            import logging
+            logging.getLogger("engine").warning(f"ATR calc failed: {e}")
+            return {"sl": None, "tp": None, "atr": None}
         except:
             return {"sl": None, "tp": None, "atr": None}
 
@@ -345,7 +363,29 @@ class TradingEngine:
         levels = self.state.position_sl_tp.get(asset)
         if not levels or not levels.get("sl"):
             return None
-        # FIXED38: Use smart triggers if available
+        # FIXED39 SMART
+        try:
+            if levels.get("tp1") is not None:
+                from app.smart_tp_sl import check_smart_triggers
+                result = check_smart_triggers(asset, current_price, levels)
+                if result:
+                    return result
+        except:
+            pass
+        side = levels.get("side", 0)
+        sl, tp = levels.get("sl"), levels.get("tp")
+        if side > 0:
+            if current_price <= sl:
+                return f"stop_loss SL={sl:.4f} L{levels.get('level',0)}"
+            if tp and current_price >= tp:
+                return f"take_profit TP={tp:.4f} L{levels.get('level',0)}"
+        elif side < 0:
+            if current_price >= sl:
+                return f"stop_loss SL={sl:.4f} L{levels.get('level',0)}"
+            if tp and current_price <= tp:
+                return f"take_profit TP={tp:.4f} L{levels.get('level',0)}"
+        return None
+        # FIXED39: Use smart triggers if available
         if levels.get("tp1") is not None:  # smart ladder
             result = check_smart_triggers(asset, current_price, levels)
             if result:
@@ -570,7 +610,7 @@ class TradingEngine:
             })
         self.state.net_book = net_book
         
-        # FIXED38: Auto-register SMART TP/SL for existing positions without SL/TP
+        # FIXED39: Auto-register SMART TP/SL for existing positions without SL/TP
         try:
             for inst, qty in inventory.items():
                 if abs(qty) < 1e-9:
@@ -611,7 +651,7 @@ class TradingEngine:
                 sl_tp_overrides[asset] = trigger
                 net_book[asset] = {**b, "target_coin": 0.0, "_sl_tp_override": trigger}
                 continue
-            # FIXED38 SMART TP/SL LADDER
+            # FIXED39 SMART TP/SL LADDER
             try:
                 pos_state = self.state.position_sl_tp.get(asset)
                 if pos_state:
@@ -916,7 +956,7 @@ class TradingEngine:
                                 self.state.push("info", f"SMART TP/SL registered for {asset}: SL={levels.get('sl'):.4f} TP1={levels.get('tp1'):.4f} TP2={levels.get('tp2'):.4f}")
         except:
             pass
-        # FIXED38: Also initialize SL/TP for existing positions that don't have it
+        # FIXED39: Also initialize SL/TP for existing positions that don't have it
         try:
             for asset in list(self.state.position_sl_tp.keys()):
                 if asset not in self._candle_cache:
