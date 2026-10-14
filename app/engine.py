@@ -331,7 +331,7 @@ class TradingEngine:
             if atr <= 0 or entry_price <= 0 or side == 0:
                 return {"sl": None, "tp": None, "atr": None}
             s = self.settings
-            # FIXED49 SMART LADDER
+            # FIXED50 SMART LADDER
             if getattr(s, 'smart_tp_sl_enabled', True):
                 cfg = {
                     'sl_atr': getattr(s, 'smart_sl_atr', 2.0),
@@ -363,7 +363,7 @@ class TradingEngine:
         levels = self.state.position_sl_tp.get(asset)
         if not levels or not levels.get("sl"):
             return None
-        # FIXED49 SMART
+        # FIXED50 SMART
         try:
             if levels.get("tp1") is not None:
                 from app.smart_tp_sl import check_smart_triggers
@@ -385,7 +385,7 @@ class TradingEngine:
             if tp and current_price <= tp:
                 return f"take_profit TP={tp:.4f} L{levels.get('level',0)}"
         return None
-        # FIXED49: Use smart triggers if available
+        # FIXED50: Use smart triggers if available
         if levels.get("tp1") is not None:  # smart ladder
             result = check_smart_triggers(asset, current_price, levels)
             if result:
@@ -446,6 +446,9 @@ class TradingEngine:
             self.state.push("error", f"v018 Close {asset} failed: {exc}")
             log.warning(f"v018 Close {asset} failed: {exc}")
             return {"ok": False, "asset": asset, "error": str(exc)}
+
+    def set_telegram_reporter(self, reporter):
+        self._telegram_reporter = reporter
 
     def notify_test_trade(self, event: str, snapshot: dict):
         """For test trade notifications"""
@@ -610,7 +613,7 @@ class TradingEngine:
             })
         self.state.net_book = net_book
         
-        # FIXED49: Auto-register SMART TP/SL for existing positions without SL/TP
+        # FIXED50: Auto-register SMART TP/SL for existing positions without SL/TP
         try:
             for inst, qty in inventory.items():
                 if abs(qty) < 1e-9:
@@ -651,7 +654,7 @@ class TradingEngine:
                 sl_tp_overrides[asset] = trigger
                 net_book[asset] = {**b, "target_coin": 0.0, "_sl_tp_override": trigger}
                 continue
-            # FIXED49 SMART TP/SL LADDER
+            # FIXED50 SMART TP/SL LADDER
             try:
                 pos_state = self.state.position_sl_tp.get(asset)
                 if pos_state:
@@ -940,18 +943,31 @@ class TradingEngine:
 
     def _log_fill(self, action: dict):
         self.state.last_fill_at = utcnow()
-        # FIXED49: Send individual trade report to telegram
+        # FIXED50: Send individual trade report to telegram - ROBUST
         try:
-            from app.telegram_bot import get_reporter
-            reporter = get_reporter()
-            if reporter and reporter.enabled:
-                # Add timestamp if missing
+            reporter = getattr(self, '_telegram_reporter', None)
+            if not reporter:
+                try:
+                    from app.telegram_bot import get_reporter
+                    reporter = get_reporter()
+                except:
+                    reporter = None
+            if reporter and getattr(reporter, 'enabled', False):
                 if "ts" not in action:
                     action["ts"] = utcnow()
+                if "filled_amount" not in action and "amount" in action:
+                    action["filled_amount"] = action["amount"]
                 reporter.send_trade_report(action)
+                self.state.push("info", f"Trade report sent to telegram: {action.get('asset')} {action.get('direction')} {action.get('filled_amount') or action.get('amount')} @ {action.get('price')}")
+            else:
+                self.state.push("warning", f"Trade report skipped: reporter={reporter} enabled={getattr(reporter, 'enabled', False) if reporter else False} for {action.get('asset')}")
         except Exception as e:
-            import logging
-            logging.getLogger("engine").warning(f"Telegram trade report failed: {e}")
+            import logging, traceback
+            logging.getLogger("engine").warning(f"Telegram trade report failed: {e} {traceback.format_exc()[:500]}")
+            try:
+                self.state.push("error", f"Trade report failed: {e} for {action.get('asset')}")
+            except:
+                pass
         
         try:
             asset = action.get("asset")
@@ -969,21 +985,17 @@ class TradingEngine:
                                 self.state.push("info", f"SMART TP/SL registered for {asset}: SL={levels.get('sl'):.4f} TP1={levels.get('tp1'):.4f} TP2={levels.get('tp2'):.4f}")
         except:
             pass
-        # FIXED49: Also initialize SL/TP for existing positions that don't have it
         try:
             for asset in list(self.state.position_sl_tp.keys()):
                 if asset not in self._candle_cache:
                     continue
-            # Check inventory for missing SL/TP
             for inst, qty in getattr(self, '_last_inventory', {}).items():
                 if abs(qty) < 1e-9:
                     continue
-                # Find asset from instrument
                 asset = inst.replace("USDT","")
                 if asset not in self.state.position_sl_tp:
                     df = self._candle_cache.get(asset, (0, None))[1] if asset in self._candle_cache else None
                     if df is not None and len(df) > 20:
-                        # Find position avg price
                         avg_price = 0
                         for p in self.state.positions:
                             if p.get("instrument_name") == inst:
@@ -994,11 +1006,12 @@ class TradingEngine:
                             levels = self._calculate_atr_levels(df, avg_price, side)
                             if levels.get("sl") is not None:
                                 self.state.position_sl_tp[asset] = {**levels, "side": side, "entry_price": avg_price}
-                                self.state.push("info", f"SMART TP/SL auto-registered for existing {asset}: SL={levels.get('sl'):.4f} TP1={levels.get('tp1'):.4f}")
-        except Exception as e:
+        except:
             pass
         entry = {"ts": self.state.last_fill_at, **{k: action.get(k) for k in ("asset", "instrument", "status", "amount", "price", "notional_usd", "order_id")}}
         self.state.orders_log = (self.state.orders_log + [entry])[-300:]
+
+
 
 _engine: Optional[TradingEngine] = None
 
