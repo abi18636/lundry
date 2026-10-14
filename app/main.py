@@ -24,15 +24,15 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED53-SMART-TPSL-LADDER"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED54-SMART-TPSL-LADDER"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
     expected = get_settings().dashboard_token
     if not expected:
-        # FIXED53: Allow public control when no token set for dashboard usability, log warning
+        # FIXED54: Allow public control when no token set for dashboard usability, log warning
         if control:
-            log.warning("Public control allowed - no DASHBOARD_TOKEN set (FIXED53)")
+            log.warning("Public control allowed - no DASHBOARD_TOKEN set (FIXED54)")
         return
     token = x_token or (authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else "")
     if not token or not hmac.compare_digest(token, expected):
@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
             except:
                 pass
             reporter.start_background()
-            log.info(f"Telegram reporter bound to engine for individual trade reports FIXED53")
+            log.info(f"Telegram reporter bound to engine for individual trade reports FIXED54")
     except Exception:
         log.exception("telegram initialization failed")
     engine.start()
@@ -137,7 +137,7 @@ def diagnostics(authorization: Optional[str] = Header(None), x_token: Optional[s
     snap = get_engine().snapshot()
     eng = get_engine()
     sltp = eng.state.position_sl_tp if hasattr(eng.state, "position_sl_tp") else {}
-    # FIXED53: Ensure both keys have same data for dashboard compatibility
+    # FIXED54: Ensure both keys have same data for dashboard compatibility
     return {"build": BUILD, "diagnostics": snap["diagnostics"], "market_data": snap["market_data"],
             "risk": snap["risk"], "actions": snap["actions"], "pending_order": snap["pending_order"],
             "ops_reviews": snap["ops_reviews"], "version": snap.get("version"), "sltp": sltp, "position_sl_tp": sltp, "smart_tpsl": sltp}
@@ -362,6 +362,25 @@ def debug_settings(authorization: Optional[str] = Header(None), x_token: Optiona
         "loop_seconds": s.loop_seconds,
         "build": BUILD,
     }
+
+@app.get("/api/debug/telegram/send_test")
+def debug_telegram_send_test(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    try:
+        from app.telegram_bot import get_reporter
+        reporter = get_reporter()
+        if not reporter:
+            return {"ok": False, "error": "no reporter"}
+        import httpx
+        url = f"https://api.telegram.org/bot{reporter.bot_token}/sendMessage"
+        payload = {"chat_id": reporter.chat_id, "text": "TEST FIXED54 plain text"}
+        resp = httpx.post(url, json=payload, timeout=10)
+        direct = {"status_code": resp.status_code, "text": resp.text[:1000], "ok": resp.status_code==200}
+        ok = reporter.send("TEST via reporter.send plain FIXED54", parse_mode=None)
+        return {"ok": True, "direct_test": direct, "reporter_send_ok": ok, "stats": reporter.stats, "build": BUILD}
+    except Exception as e:
+        import traceback
+        return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:2000]}
 
 @app.get("/api/debug/telegram")
 def debug_telegram(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):

@@ -1,12 +1,12 @@
 """
-FIXED53: Individual trade reporter - plain text for reliability
+FIXED54: Individual trade reporter - plain text for reliability
 """
 from __future__ import annotations
 import logging
 log = logging.getLogger("trade_reporter")
 
 def format_single_trade(action: dict, version: str = "v018") -> str:
-    """Format single trade - FIXED53 plain text without HTML to avoid parse errors"""
+    """Format single trade - FIXED54 plain text without HTML to avoid parse errors"""
     try:
         asset = str(action.get("asset","?"))[:20]
         inst = str(action.get("instrument","?"))[:20]
@@ -54,7 +54,7 @@ def format_single_trade(action: dict, version: str = "v018") -> str:
         return f"Trade {action.get('asset','?')} {action.get('direction','?')} {action.get('amount',0)} error:{e}"
 
 def format_single_trade_html(action: dict, version: str = "v018") -> str:
-    """HTML version - kept for reference but not used in FIXED53"""
+    """HTML version - kept for reference but not used in FIXED54"""
     try:
         import html
         def _esc(s):
