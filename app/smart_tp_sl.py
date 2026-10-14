@@ -1,5 +1,5 @@
 """
-v018 FIXED48 SMART TP/SL LADDER
+v018 FIXED49 SMART TP/SL LADDER
 هوشمند پله‌ای:
 - ثبت TP/SL در معاملات
 - TP هوشمند با سطوح چندگانه
@@ -121,7 +121,7 @@ def manage_smart_exit(asset: str, current_price: float, state: dict, atr: float,
     tp3 = state.get("tp3")
     tp4 = state.get("tp4")
     
-    # === LEVEL 0 -> 1: Breakeven after 1 ATR profit === FIXED48
+    # === LEVEL 0 -> 1: Breakeven after 1 ATR profit === FIXED49
     if level == 0 and profit_atr >= 1.0 and not state.get("breakeven_moved"):
         actions["new_sl"] = entry
         actions["breakeven_moved"] = True
