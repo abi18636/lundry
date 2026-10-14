@@ -305,9 +305,9 @@ class AriaXClient:
 
 
     def close_position(self, symbol: str) -> dict:
-        """Close position by placing opposite reduce_only order"""
+        """Close position - FIXED48: meet min qty and 5$ notional with reduce_only"""
         try:
-            # Get current positions
+            import math
             positions = self.positions("USDT")
             target_pos = None
             for p in positions:
@@ -315,18 +315,14 @@ class AriaXClient:
                 if inst == symbol or inst.replace("USDT","") == symbol.replace("USDT","").replace("USD",""):
                     target_pos = p
                     break
-                # Also try without USDT
                 if symbol.replace("USDT","").upper() in inst.upper():
                     target_pos = p
                     break
-            
             if not target_pos:
-                # Try direct symbol match with USD variant
                 for p in positions:
                     if p.get("symbol","").upper() == symbol.replace("USDT","USD").upper() or p.get("instrument_name","").upper() == symbol.upper():
                         target_pos = p
                         break
-            
             if not target_pos:
                 return {"ok": False, "error": f"No position found for {symbol}", "positions": len(positions)}
             
@@ -334,13 +330,56 @@ class AriaXClient:
             if abs(size) < 1e-9:
                 return {"ok": False, "error": f"Position size 0 for {symbol}"}
             
-            # Opposite side
-            side = "sell" if size > 0 else "buy"
-            qty = abs(size) * 0.999  # 0.999 safety to avoid qty exceeds
+            # Get instrument meta for min qty and step
+            try:
+                meta = self.instrument(symbol)
+                step = float(meta.get("contract_size") or meta.get("qty_step") or 0.001)
+                minimum = float(meta.get("min_trade_amount") or meta.get("min_qty") or step)
+            except:
+                step = 0.001
+                minimum = 0.001
             
-            # Place reduce_only market order
-            result = self._place_order(symbol, side, qty, order_type="market", reduce_only=True, label=f"close_{symbol}")
-            return {"ok": True, "symbol": symbol, "side": side, "qty": qty, "result": result, "closed_size": size}
+            # Get current price for notional calc
+            try:
+                book = self.order_book(symbol, 1)
+                price = float(book.get("mark_price") or book.get("bids",[[0]])[0][0] or 0)
+            except:
+                price = float(target_pos.get("mark_price") or target_pos.get("average_price") or 0)
+            
+            # Calculate required qty to meet 5.1$ notional
+            min_qty_notional = 5.1 / price if price>0 else minimum
+            if step>0:
+                min_qty_notional = math.ceil(min_qty_notional / step) * step
+            required_min = max(minimum, min_qty_notional, step)
+            
+            # For close, use max(current, required_min) with reduce_only=True
+            # Exchange with reduce_only should close only up to current size
+            qty = max(abs(size), required_min)
+            # Ensure qty is multiple of step
+            if step>0:
+                qty = math.ceil(qty / step) * step
+            
+            side = "sell" if size > 0 else "buy"
+            
+            # Try v5 first (might have different min checks), fallback to /api/order
+            try:
+                # Try v5 order create
+                body_v5 = {
+                    "symbol": symbol.replace("USDT","USD") if symbol.endswith("USDT") else symbol,
+                    "side": side,
+                    "orderType": "Market",
+                    "qty": str(qty),
+                    "reduceOnly": True,
+                }
+                result = self._request("POST", "/v5/order/create", json_body=body_v5, use_v5=True)
+                return {"ok": True, "symbol": symbol, "side": side, "qty": qty, "result": result, "closed_size": size, "via": "v5"}
+            except Exception as e_v5:
+                # Fallback to /api/order
+                try:
+                    result = self._place_order(symbol, side, qty, order_type="market", reduce_only=True, label=f"close_{symbol}_fixed48")
+                    return {"ok": True, "symbol": symbol, "side": side, "qty": qty, "result": result, "closed_size": size, "via": "api", "v5_error": str(e_v5)[:200]}
+                except Exception as e_api:
+                    return {"ok": False, "error": f"v5 failed: {e_v5}, api failed: {e_api}", "symbol": symbol, "qty": qty, "size": size}
         except Exception as e:
             import traceback
             return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:500]}
