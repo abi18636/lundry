@@ -117,20 +117,23 @@ def plan_rebalance(current: float, desired: float, price: float, step: float, mi
         )
     
     if abs_desired < 1e-9:
-        # Close - FIXED44: Use max(current, minimum) to meet exchange min qty
+        # Close - FIXED45: Meet both min qty and min notional 5$
         intent = "close"
-        reduce_only = False  # FIXED44: Don't use reduce_only for tiny positions, allow flip then close
+        reduce_only = False
         direction = "sell" if current > 0 else "buy"
-        # FIXED44: If current < minimum, use minimum qty to meet exchange min
-        # This may flip position but next loop will close the flip
-        if abs_current < minimum:
-            amount = minimum
-        elif abs_current < step:
-            amount = abs_current
+        # FIXED45: Calculate qty that meets both min qty and 5$ notional
+        # For close, we need to close full current, but ensure qty meets exchange minimums
+        # If current < minimum, use minimum. If current*price <5$, use 5$/price
+        min_qty_for_notional = 5.0 / price if price>0 else minimum
+        required_min = max(minimum, min_qty_for_notional, step)
+        if abs_current < required_min:
+            # Current smaller than required min, use required min to meet exchange
+            # This will flip position, but we will close flip next loop
+            amount = required_min
         else:
             amount = floor_amount(abs_current, step)
-            if amount < minimum:
-                amount = minimum
+            if amount < required_min:
+                amount = required_min
         target = 0.0
     elif abs_current < 1e-9:
         # Open
@@ -140,18 +143,18 @@ def plan_rebalance(current: float, desired: float, price: float, step: float, mi
         amount = floor_amount(abs_desired, step)
         target = desired
     elif current * desired < 0:
-        # Reversal - FIXED44: close with minimum
+        # Reversal - FIXED45: meet min qty and notional
         intent = "reverse"
         reduce_only = False
         direction = "sell" if current > 0 else "buy"
-        if abs_current < minimum:
-            amount = minimum
-        elif abs_current < step:
-            amount = abs_current
+        min_qty_for_notional = 5.0 / price if price>0 else minimum
+        required_min = max(minimum, min_qty_for_notional, step)
+        if abs_current < required_min:
+            amount = required_min
         else:
             amount = floor_amount(abs_current, step)
-            if amount < minimum:
-                amount = minimum
+            if amount < required_min:
+                amount = required_min
         target = 0.0
     elif abs_desired < abs_current:
         # Reduction
@@ -171,7 +174,7 @@ def plan_rebalance(current: float, desired: float, price: float, step: float, mi
         amount = floor_amount(abs_desired - abs_current, step)
         target = desired
     
-    # Check minimums - FIXED44: Allow close even if small, bypass checks for close intent
+    # Check minimums - FIXED45: Allow close even if small, bypass checks for close intent
     if intent in ("close", "reverse"):
         # For close, don't skip for small delta or below minimum - try to close anyway
         # Exchange may reject, but we should attempt
