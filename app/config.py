@@ -1,5 +1,5 @@
 """
-v018 FIXED42-SMART-TPSL-LADDER"""
+v018 FIXED43-SMART-TPSL-LADDER"""
 from __future__ import annotations
 from functools import lru_cache
 from typing import List
@@ -18,15 +18,15 @@ class Settings(BaseSettings):
     ariax_fallback_url: str = Field(default="https://dryclean-app-1.onrender.com")
     trading_enabled: bool = True
     dry_run: bool = False
-    capital_usd: float = Field(default=400.0, gt=0)
+    capital_usd: float = Field(default=2000.0, gt=0)
     lev_cap: float = Field(default=2.0, gt=0, le=5.0)
     long_only: bool = False
     assets: str = "BTC,ETH,SOL,AVAX,LINK,XRP,DOGE,ADA,DOT,LTC"
     sleeve_weights: str = "diversified_5:0.15,zenith_apex:0.15,almasi_primary:0.15,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.10,mean_reversion:0.20"
     sleeves_enabled: str = "diversified_5,zenith_apex,almasi_primary,inst_v3_stable,inst_v3_primary,zenith_endurance,mean_reversion"
     loop_seconds: int = 90
-    max_notional_usd: float = 200.0
-    min_notional_usd: float = 5.0
+    max_notional_usd: float = 1000.0
+    min_notional_usd: float = 5.0  # FIXED43: exchange min 5$
     rebalance_notional_usd: float = 1.0
     max_drawdown_pct: float = 0.15
     max_spread_bps: float = 200.0
@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     breakeven_atr: float = 1.0
     partial_take_atr: float = 2.0
     partial_take_fraction: float = 0.5
-    # FIXED42 SMART TP/SL LADDER
+    # FIXED43 SMART TP/SL LADDER
     smart_tp_sl_enabled: bool = True
     smart_sl_atr: float = 2.0
     smart_tp1_atr: float = 1.5
@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
     telegram_bot_username: str = "TestTraid_bot"
     report_timezone: str = "Europe/Istanbul"
-    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED42-SMART-TPSL-LADDER"
+    version: str = "v018-10pairs-7sleeves-testtrade-close-FIXED43-SMART-TPSL-LADDER"
 
     @property
     def effective_capital(self) -> float:

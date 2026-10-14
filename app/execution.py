@@ -117,12 +117,19 @@ def plan_rebalance(current: float, desired: float, price: float, step: float, mi
         )
     
     if abs_desired < 1e-9:
-        # Close
+        # Close - FIXED43: Use full size, handle tiny positions
         intent = "close"
         reduce_only = True
         direction = "sell" if current > 0 else "buy"
-        # v016 FIX: Use full current size with 0.999 safety, not 50%
-        amount = floor_amount(abs_current * 0.999, step)
+        # FIXED43: For close, use full current size, ceil to step to avoid 0, bypass 0.999 that causes 0 for small positions
+        # If current < step, use current directly (not floored) to allow close of tiny positions
+        if abs_current < step:
+            amount = abs_current  # Use exact size for tiny positions
+        else:
+            amount = floor_amount(abs_current, step)
+            # Ensure at least step if current >= step
+            if amount < step * 0.9 and abs_current >= step:
+                amount = step
         target = 0.0
     elif abs_current < 1e-9:
         # Open
@@ -132,13 +139,17 @@ def plan_rebalance(current: float, desired: float, price: float, step: float, mi
         amount = floor_amount(abs_desired, step)
         target = desired
     elif current * desired < 0:
-        # Reversal - will be handled as close-first in engine
+        # Reversal - FIXED43: close full size
         intent = "reverse"
         reduce_only = True
         direction = "sell" if current > 0 else "buy"
-        # Close current first
-        amount = floor_amount(abs_current * 0.999, step)
-        target = 0.0  # First close, then open opposite next cycle
+        if abs_current < step:
+            amount = abs_current
+        else:
+            amount = floor_amount(abs_current, step)
+            if amount < step * 0.9:
+                amount = step
+        target = 0.0
     elif abs_desired < abs_current:
         # Reduction
         intent = "reduce"
@@ -157,18 +168,31 @@ def plan_rebalance(current: float, desired: float, price: float, step: float, mi
         amount = floor_amount(abs_desired - abs_current, step)
         target = desired
     
-    # Check minimums
-    if amount < minimum * 0.9:  # 10% tolerance
-        if abs_delta * price < rebalance_threshold_usd:
+    # Check minimums - FIXED43: Allow close even if small, bypass checks for close intent
+    if intent in ("close", "reverse"):
+        # For close, don't skip for small delta or below minimum - try to close anyway
+        # Exchange may reject, but we should attempt
+        if amount <= 0:
             return PlanResult(
-                status="skip_small", reason=f"delta {abs_delta*price:.2f}$ < {rebalance_threshold_usd}$ threshold", target=desired,
-                delta=delta, amount=amount, direction=direction, reduce_only=reduce_only, intent=intent
+                status="target_reached", reason="close amount 0", target=desired,
+                delta=delta, amount=0, direction=direction, reduce_only=reduce_only, intent=intent
             )
-        if amount * price < 5.0:  # Exchange min notional
-            return PlanResult(
-                status="below_exchange_minimum", reason=f"notional {amount*price:.2f}$ < 5$ exchange min", target=desired,
-                delta=delta, amount=amount, direction=direction, reduce_only=reduce_only, intent=intent
-            )
+        # Only check if amount is truly 0, otherwise allow close attempt even if <5$
+        if amount * price < 1.0 and amount < minimum * 0.5:
+            # Still allow close attempt for tiny positions, but log
+            pass
+    else:
+        if amount < minimum * 0.9:  # 10% tolerance
+            if abs_delta * price < rebalance_threshold_usd:
+                return PlanResult(
+                    status="skip_small", reason=f"delta {abs_delta*price:.2f}$ < {rebalance_threshold_usd}$ threshold", target=desired,
+                    delta=delta, amount=amount, direction=direction, reduce_only=reduce_only, intent=intent
+                )
+            if amount * price < 5.0:  # Exchange min notional
+                return PlanResult(
+                    status="below_exchange_minimum", reason=f"notional {amount*price:.2f}$ < 5$ exchange min", target=desired,
+                    delta=delta, amount=amount, direction=direction, reduce_only=reduce_only, intent=intent
+                )
     
     if amount <= 0:
         return PlanResult(

@@ -24,15 +24,15 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED42-SMART-TPSL-LADDER"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED43-SMART-TPSL-LADDER"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
     expected = get_settings().dashboard_token
     if not expected:
-        # FIXED42: Allow public control when no token set for dashboard usability, log warning
+        # FIXED43: Allow public control when no token set for dashboard usability, log warning
         if control:
-            log.warning("Public control allowed - no DASHBOARD_TOKEN set (FIXED42)")
+            log.warning("Public control allowed - no DASHBOARD_TOKEN set (FIXED43)")
         return
     token = x_token or (authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else "")
     if not token or not hmac.compare_digest(token, expected):
@@ -132,7 +132,7 @@ def diagnostics(authorization: Optional[str] = Header(None), x_token: Optional[s
     snap = get_engine().snapshot()
     eng = get_engine()
     sltp = eng.state.position_sl_tp if hasattr(eng.state, "position_sl_tp") else {}
-    # FIXED42: Ensure both keys have same data for dashboard compatibility
+    # FIXED43: Ensure both keys have same data for dashboard compatibility
     return {"build": BUILD, "diagnostics": snap["diagnostics"], "market_data": snap["market_data"],
             "risk": snap["risk"], "actions": snap["actions"], "pending_order": snap["pending_order"],
             "ops_reviews": snap["ops_reviews"], "version": snap.get("version"), "sltp": sltp, "position_sl_tp": sltp, "smart_tpsl": sltp}
