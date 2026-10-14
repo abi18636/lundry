@@ -305,7 +305,7 @@ class AriaXClient:
 
 
     def close_position(self, symbol: str) -> dict:
-        """Close position - FIXED50: meet min qty and 5$ notional with reduce_only"""
+        """Close position - FIXED51: meet min qty and 5$ notional with reduce_only"""
         try:
             import math
             positions = self.positions("USDT")
