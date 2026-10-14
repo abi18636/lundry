@@ -13,6 +13,3 @@ state/
 .vscode/
 
 audit/
-.github_pat
-git_push.sh
-.env

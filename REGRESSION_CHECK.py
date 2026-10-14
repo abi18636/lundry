@@ -32,7 +32,7 @@ FEATURES = {
     # Execution
     "plan_rebalance": ["app/execution.py", "plan_rebalance"],
     "floor_amount": ["app/execution.py", "floor_amount"],
-    "close_tiny_fix": ["app/execution.py", "FIXED48"],
+    "close_tiny_fix": ["app/execution.py", "ceil"],
     "ceil_notional": ["app/execution.py", "math.ceil"],
     # AriaX
     "ariax_client": ["app/ariax.py", "AriaXClient"],
