@@ -331,7 +331,7 @@ class TradingEngine:
             if atr <= 0 or entry_price <= 0 or side == 0:
                 return {"sl": None, "tp": None, "atr": None}
             s = self.settings
-            # FIXED43 SMART LADDER
+            # FIXED44 SMART LADDER
             if getattr(s, 'smart_tp_sl_enabled', True):
                 cfg = {
                     'sl_atr': getattr(s, 'smart_sl_atr', 2.0),
@@ -363,7 +363,7 @@ class TradingEngine:
         levels = self.state.position_sl_tp.get(asset)
         if not levels or not levels.get("sl"):
             return None
-        # FIXED43 SMART
+        # FIXED44 SMART
         try:
             if levels.get("tp1") is not None:
                 from app.smart_tp_sl import check_smart_triggers
@@ -385,7 +385,7 @@ class TradingEngine:
             if tp and current_price <= tp:
                 return f"take_profit TP={tp:.4f} L{levels.get('level',0)}"
         return None
-        # FIXED43: Use smart triggers if available
+        # FIXED44: Use smart triggers if available
         if levels.get("tp1") is not None:  # smart ladder
             result = check_smart_triggers(asset, current_price, levels)
             if result:
@@ -610,7 +610,7 @@ class TradingEngine:
             })
         self.state.net_book = net_book
         
-        # FIXED43: Auto-register SMART TP/SL for existing positions without SL/TP
+        # FIXED44: Auto-register SMART TP/SL for existing positions without SL/TP
         try:
             for inst, qty in inventory.items():
                 if abs(qty) < 1e-9:
@@ -651,7 +651,7 @@ class TradingEngine:
                 sl_tp_overrides[asset] = trigger
                 net_book[asset] = {**b, "target_coin": 0.0, "_sl_tp_override": trigger}
                 continue
-            # FIXED43 SMART TP/SL LADDER
+            # FIXED44 SMART TP/SL LADDER
             try:
                 pos_state = self.state.position_sl_tp.get(asset)
                 if pos_state:
@@ -956,7 +956,7 @@ class TradingEngine:
                                 self.state.push("info", f"SMART TP/SL registered for {asset}: SL={levels.get('sl'):.4f} TP1={levels.get('tp1'):.4f} TP2={levels.get('tp2'):.4f}")
         except:
             pass
-        # FIXED43: Also initialize SL/TP for existing positions that don't have it
+        # FIXED44: Also initialize SL/TP for existing positions that don't have it
         try:
             for asset in list(self.state.position_sl_tp.keys()):
                 if asset not in self._candle_cache:

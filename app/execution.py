@@ -117,19 +117,20 @@ def plan_rebalance(current: float, desired: float, price: float, step: float, mi
         )
     
     if abs_desired < 1e-9:
-        # Close - FIXED43: Use full size, handle tiny positions
+        # Close - FIXED44: Use max(current, minimum) to meet exchange min qty
         intent = "close"
-        reduce_only = True
+        reduce_only = False  # FIXED44: Don't use reduce_only for tiny positions, allow flip then close
         direction = "sell" if current > 0 else "buy"
-        # FIXED43: For close, use full current size, ceil to step to avoid 0, bypass 0.999 that causes 0 for small positions
-        # If current < step, use current directly (not floored) to allow close of tiny positions
-        if abs_current < step:
-            amount = abs_current  # Use exact size for tiny positions
+        # FIXED44: If current < minimum, use minimum qty to meet exchange min
+        # This may flip position but next loop will close the flip
+        if abs_current < minimum:
+            amount = minimum
+        elif abs_current < step:
+            amount = abs_current
         else:
             amount = floor_amount(abs_current, step)
-            # Ensure at least step if current >= step
-            if amount < step * 0.9 and abs_current >= step:
-                amount = step
+            if amount < minimum:
+                amount = minimum
         target = 0.0
     elif abs_current < 1e-9:
         # Open
@@ -139,16 +140,18 @@ def plan_rebalance(current: float, desired: float, price: float, step: float, mi
         amount = floor_amount(abs_desired, step)
         target = desired
     elif current * desired < 0:
-        # Reversal - FIXED43: close full size
+        # Reversal - FIXED44: close with minimum
         intent = "reverse"
-        reduce_only = True
+        reduce_only = False
         direction = "sell" if current > 0 else "buy"
-        if abs_current < step:
+        if abs_current < minimum:
+            amount = minimum
+        elif abs_current < step:
             amount = abs_current
         else:
             amount = floor_amount(abs_current, step)
-            if amount < step * 0.9:
-                amount = step
+            if amount < minimum:
+                amount = minimum
         target = 0.0
     elif abs_desired < abs_current:
         # Reduction
@@ -168,7 +171,7 @@ def plan_rebalance(current: float, desired: float, price: float, step: float, mi
         amount = floor_amount(abs_desired - abs_current, step)
         target = desired
     
-    # Check minimums - FIXED43: Allow close even if small, bypass checks for close intent
+    # Check minimums - FIXED44: Allow close even if small, bypass checks for close intent
     if intent in ("close", "reverse"):
         # For close, don't skip for small delta or below minimum - try to close anyway
         # Exchange may reject, but we should attempt
