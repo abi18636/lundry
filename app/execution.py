@@ -117,11 +117,11 @@ def plan_rebalance(current: float, desired: float, price: float, step: float, mi
         )
     
     if abs_desired < 1e-9:
-        # Close - FIXED52: Use ceil to ensure notional >=5.1$ (safety margin)
+        # Close - FIXED53: Use ceil to ensure notional >=5.1$ (safety margin)
         intent = "close"
         reduce_only = True
         direction = "sell" if current > 0 else "buy"
-        # FIXED52: Calculate required qty to meet 5.1$ notional with ceil
+        # FIXED53: Calculate required qty to meet 5.1$ notional with ceil
         min_qty_for_notional = 5.1 / price if price>0 else minimum
         # Ceil to step to ensure >= notional
         if step>0:
@@ -146,7 +146,7 @@ def plan_rebalance(current: float, desired: float, price: float, step: float, mi
         amount = floor_amount(abs_desired, step)
         target = desired
     elif current * desired < 0:
-        # Reversal - FIXED52: ceil to meet notional
+        # Reversal - FIXED53: ceil to meet notional
         intent = "reverse"
         reduce_only = True
         direction = "sell" if current > 0 else "buy"
@@ -180,7 +180,7 @@ def plan_rebalance(current: float, desired: float, price: float, step: float, mi
         amount = floor_amount(abs_desired - abs_current, step)
         target = desired
     
-    # Check minimums - FIXED52: Allow close even if small, bypass checks for close intent
+    # Check minimums - FIXED53: Allow close even if small, bypass checks for close intent
     if intent in ("close", "reverse"):
         # For close, don't skip for small delta or below minimum - try to close anyway
         # Exchange may reject, but we should attempt

@@ -331,7 +331,7 @@ class TradingEngine:
             if atr <= 0 or entry_price <= 0 or side == 0:
                 return {"sl": None, "tp": None, "atr": None}
             s = self.settings
-            # FIXED52 SMART LADDER
+            # FIXED53 SMART LADDER
             if getattr(s, 'smart_tp_sl_enabled', True):
                 cfg = {
                     'sl_atr': getattr(s, 'smart_sl_atr', 2.0),
@@ -363,7 +363,7 @@ class TradingEngine:
         levels = self.state.position_sl_tp.get(asset)
         if not levels or not levels.get("sl"):
             return None
-        # FIXED52 SMART
+        # FIXED53 SMART
         try:
             if levels.get("tp1") is not None:
                 from app.smart_tp_sl import check_smart_triggers
@@ -385,7 +385,7 @@ class TradingEngine:
             if tp and current_price <= tp:
                 return f"take_profit TP={tp:.4f} L{levels.get('level',0)}"
         return None
-        # FIXED52: Use smart triggers if available
+        # FIXED53: Use smart triggers if available
         if levels.get("tp1") is not None:  # smart ladder
             result = check_smart_triggers(asset, current_price, levels)
             if result:
@@ -613,7 +613,7 @@ class TradingEngine:
             })
         self.state.net_book = net_book
         
-        # FIXED52: Auto-register SMART TP/SL for existing positions without SL/TP
+        # FIXED53: Auto-register SMART TP/SL for existing positions without SL/TP
         try:
             for inst, qty in inventory.items():
                 if abs(qty) < 1e-9:
@@ -654,7 +654,7 @@ class TradingEngine:
                 sl_tp_overrides[asset] = trigger
                 net_book[asset] = {**b, "target_coin": 0.0, "_sl_tp_override": trigger}
                 continue
-            # FIXED52 SMART TP/SL LADDER
+            # FIXED53 SMART TP/SL LADDER
             try:
                 pos_state = self.state.position_sl_tp.get(asset)
                 if pos_state:
@@ -943,7 +943,7 @@ class TradingEngine:
 
     def _log_fill(self, action: dict):
         self.state.last_fill_at = utcnow()
-        # FIXED52: Send individual trade report - ULTRA ROBUST
+        # FIXED53: Send individual trade report - ULTRA ROBUST
         try:
             reporter = None
             # Try stored reporter first

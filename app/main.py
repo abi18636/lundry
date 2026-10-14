@@ -24,15 +24,15 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("main")
-BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED52-SMART-TPSL-LADDER"
+BUILD = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_SHA") or "v018-10pairs-7sleeves-testtrade-close-FIXED53-SMART-TPSL-LADDER"
 
 
 def _check_token(authorization: Optional[str] = None, x_token: Optional[str] = None, *, control: bool = False):
     expected = get_settings().dashboard_token
     if not expected:
-        # FIXED52: Allow public control when no token set for dashboard usability, log warning
+        # FIXED53: Allow public control when no token set for dashboard usability, log warning
         if control:
-            log.warning("Public control allowed - no DASHBOARD_TOKEN set (FIXED52)")
+            log.warning("Public control allowed - no DASHBOARD_TOKEN set (FIXED53)")
         return
     token = x_token or (authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else "")
     if not token or not hmac.compare_digest(token, expected):
@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
             except:
                 pass
             reporter.start_background()
-            log.info(f"Telegram reporter bound to engine for individual trade reports FIXED52")
+            log.info(f"Telegram reporter bound to engine for individual trade reports FIXED53")
     except Exception:
         log.exception("telegram initialization failed")
     engine.start()
@@ -137,7 +137,7 @@ def diagnostics(authorization: Optional[str] = Header(None), x_token: Optional[s
     snap = get_engine().snapshot()
     eng = get_engine()
     sltp = eng.state.position_sl_tp if hasattr(eng.state, "position_sl_tp") else {}
-    # FIXED52: Ensure both keys have same data for dashboard compatibility
+    # FIXED53: Ensure both keys have same data for dashboard compatibility
     return {"build": BUILD, "diagnostics": snap["diagnostics"], "market_data": snap["market_data"],
             "risk": snap["risk"], "actions": snap["actions"], "pending_order": snap["pending_order"],
             "ops_reviews": snap["ops_reviews"], "version": snap.get("version"), "sltp": sltp, "position_sl_tp": sltp, "smart_tpsl": sltp}

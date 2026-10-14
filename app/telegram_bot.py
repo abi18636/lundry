@@ -1,5 +1,5 @@
 """
-v018 FIXED52 - Telegram with proper polling + close buttons + version tracking
+v018 FIXED53 - Telegram with proper polling + close buttons + version tracking
 Fixes: previous _bg_loop only slept, never polled getUpdates, so /start /panel and close buttons didn't work
 """
 from __future__ import annotations
@@ -53,7 +53,7 @@ class TelegramReporter:
         self.enabled = bool(bot_token and chat_id)
         self.poll_commands = True
         self.version_history = []
-        self.current_version = "v018-10pairs-7sleeves-testtrade-close-FIXED52-SMART-TPSL-LADDER"
+        self.current_version = "v018-10pairs-7sleeves-testtrade-close-FIXED53-SMART-TPSL-LADDER"
         self.heartbeat_minutes = 30
         self.trade_only = True
 
@@ -116,7 +116,7 @@ class TelegramReporter:
             log.warning(f"Telegram {method} error: {exc}")
             return {}
 
-    def send(self, text: str, reply_markup: dict = None, parse_mode: str = "HTML") -> bool:
+    def send(self, text: str, reply_markup: dict = None, parse_mode: str = None) -> bool:
         if not self.enabled:
             return False
         try:
@@ -150,10 +150,8 @@ class TelegramReporter:
             log.warning(f"Send doc failed: {exc}")
 
     def send_trade_report(self, action: dict) -> None:
-        """FIXED52: Send individual trade report - FINAL with guaranteed stats"""
+        """FIXED53: Send individual trade report - PLAIN TEXT, no keyboard for reliability"""
         if not self.enabled:
-            import logging
-            logging.getLogger("telegram").warning(f"Trade report skipped: not enabled for {action.get('asset')}")
             return
         try:
             version = self.current_version
@@ -162,21 +160,28 @@ class TelegramReporter:
                     version = self._engine.settings.version or version
             except:
                 pass
+            # FIXED53: Use plain text version to avoid HTML parse errors
             text = format_single_trade(action, version)
-            positions = []
-            if self._engine:
-                try:
-                    positions = self._engine.state.positions or []
-                except:
-                    pass
-            # Increment trades_alerted BEFORE send attempt to ensure counting
+            # FIXED53: Try without keyboard first for reliability
+            # Increment before attempt
             self.stats["trades_alerted"] += 1
-            # Try send
-            ok = self.send(text, reply_markup=self._kb(positions))
-            if ok:
-                log_msg = f"✅ Trade report sent OK: {action.get('asset')} trades_alerted={self.stats['trades_alerted']} sent={self.stats['sent']}"
+            ok = self.send(text, reply_markup=None, parse_mode=None)
+            if not ok:
+                # Fallback: try with HTML and keyboard
+                try:
+                    from app.trade_reporter import format_single_trade as fmt_plain
+                    # Try even simpler
+                    simple_text = f"TRADE {action.get('asset','?')} {action.get('direction','?')} {action.get('filled_amount') or action.get('amount',0)} @ {action.get('price',0)} v{version}"
+                    ok2 = self.send(simple_text, reply_markup=None, parse_mode=None)
+                    if ok2:
+                        log_msg = f"Trade report sent via fallback plain: {action.get('asset')}"
+                    else:
+                        log_msg = f"Trade report failed both attempts: {action.get('asset')} failed={self.stats['failed']}"
+                except Exception as e2:
+                    log_msg = f"Trade report fallback error: {e2}"
             else:
-                log_msg = f"⚠️ Trade report send returned False: {action.get('asset')} trades_alerted={self.stats['trades_alerted']} failed={self.stats['failed']}"
+                log_msg = f"Trade report sent OK plain: {action.get('asset')} sent={self.stats['sent']}"
+            
             try:
                 import logging
                 logging.getLogger("telegram").info(log_msg)
@@ -196,6 +201,11 @@ class TelegramReporter:
                 self.stats["failed"] += 1
             except:
                 pass
+            try:
+                self.stats["trades_alerted"] += 1
+                self.stats["failed"] += 1
+            except:
+                pass
 
     def send_panel(self, text: Optional[str] = None) -> None:
         if not self.enabled:
@@ -208,7 +218,7 @@ class TelegramReporter:
                 f"از دکمه‌های شیشه‌ای زیر استفاده کنید.\n"
                 f"• گزارش <b>معامله</b> فقط وقتی سفارش واقعی/خطا باشد\n"
                 f"• گزارش <b>کلی فایل</b> هر {self.full_report_hours:g} ساعت یا از دکمه\n"
-                f"• <b>جدید v018 FIXED52:</b> دکمه بستن برای هر معامله مجزا + 10 جفت ارز + تست فعال + polling فعال\n"
+                f"• <b>جدید v018 FIXED53:</b> دکمه بستن برای هر معامله مجزا + 10 جفت ارز + تست فعال + polling فعال\n"
             )
             if self._engine:
                 snap = self._engine.snapshot()
@@ -380,7 +390,7 @@ class TelegramReporter:
         self.version_history = self.version_history[-20:]
         self.current_version = new_version
         if self.enabled:
-            text = f"🔄 <b>آپدیت ورژن ربات</b>\n🕐 {utcnow()}\n\nاز: <b>{_esc(old_version)}</b>\nبه: <b>{_esc(new_version)}</b>\n\n📊 تغییرات v018 FIXED52:\n• فیکس polling تلگرام - حالا دستورات کار میکند\n• افزایش جفت ارزها از 5 به 10\n• فعال‌سازی معامله تست روی BTC\n• دکمه بستن برای هر معامله مجزا\n\n🔖 ورژن فعلی: {new_version}"
+            text = f"🔄 <b>آپدیت ورژن ربات</b>\n🕐 {utcnow()}\n\nاز: <b>{_esc(old_version)}</b>\nبه: <b>{_esc(new_version)}</b>\n\n📊 تغییرات v018 FIXED53:\n• فیکس polling تلگرام - حالا دستورات کار میکند\n• افزایش جفت ارزها از 5 به 10\n• فعال‌سازی معامله تست روی BTC\n• دکمه بستن برای هر معامله مجزا\n\n🔖 ورژن فعلی: {new_version}"
             self.send(text, reply_markup=self._kb())
 
     def answer_callback(self, callback_id: str, text: str, show_alert: bool = False):
@@ -494,7 +504,7 @@ class TelegramReporter:
             self.send(f"❌ {e}", reply_markup=self._kb())
 
     def _poll_loop(self):
-        log.info("telegram poll started FIXED52")
+        log.info("telegram poll started FIXED53")
         while not self._stop.is_set():
             try:
                 data = self._api("getUpdates", offset=self._offset, timeout=25, allowed_updates=["message", "callback_query"])
@@ -577,7 +587,7 @@ class TelegramReporter:
         self._poll_thread.start()
         self._bg_thread = threading.Thread(target=self._bg_loop, daemon=True, name="tg-bg")
         self._bg_thread.start()
-        log.info(f"Telegram FIXED52 started - polling enabled, close buttons active, version {self.current_version}")
+        log.info(f"Telegram FIXED53 started - polling enabled, close buttons active, version {self.current_version}")
         try:
             import time
             time.sleep(2)
@@ -601,8 +611,8 @@ def init_reporter_from_settings(settings) -> Optional[TelegramReporter]:
         dashboard_url="",
         full_report_hours=6.0,
     )
-    _reporter.current_version = getattr(settings, 'version', 'v018-10pairs-7sleeves-testtrade-close-FIXED52-SMART-TPSL-LADDER')
-    log.info(f"Telegram FIXED52 init version={_reporter.current_version} chat={settings.telegram_chat_id}")
+    _reporter.current_version = getattr(settings, 'version', 'v018-10pairs-7sleeves-testtrade-close-FIXED53-SMART-TPSL-LADDER')
+    log.info(f"Telegram FIXED53 init version={_reporter.current_version} chat={settings.telegram_chat_id}")
     return _reporter
 
 def get_reporter() -> Optional[TelegramReporter]:
