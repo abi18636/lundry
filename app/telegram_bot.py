@@ -1,5 +1,5 @@
 """
-v018 FIXED54 - Telegram with proper polling + close buttons + version tracking
+v018 FIXED55 - Telegram with proper polling + close buttons + version tracking
 Fixes: previous _bg_loop only slept, never polled getUpdates, so /start /panel and close buttons didn't work
 """
 from __future__ import annotations
@@ -53,7 +53,7 @@ class TelegramReporter:
         self.enabled = bool(bot_token and chat_id)
         self.poll_commands = True
         self.version_history = []
-        self.current_version = "v018-10pairs-7sleeves-testtrade-close-FIXED54-SMART-TPSL-LADDER"
+        self.current_version = "v018-10pairs-7sleeves-testtrade-close-FIXED55-SMART-TPSL-LADDER"
         self.heartbeat_minutes = 30
         self.trade_only = True
 
@@ -100,6 +100,35 @@ class TelegramReporter:
 
     def _api(self, method: str, as_json: bool = False, count_stats: bool = True, **params):
         if not self.enabled:
+            return {}
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/{method}"
+            clean = {k: v for k, v in params.items() if v is not None}
+            resp = httpx.post(url, json=clean, timeout=30)
+            try:
+                data = resp.json()
+            except:
+                data = {}
+            if resp.status_code == 200:
+                if not data.get("ok"):
+                    log.warning(f"Telegram {method} ok=False: {str(data)[:500]}")
+                return data
+            else:
+                # For 409 conflict, return data with description but don't log as error
+                if resp.status_code == 409:
+                    log.info(f"Telegram {method} 409 conflict - another instance polling")
+                    return data if data else {"ok": False, "description": "Conflict"}
+                log.warning(f"Telegram {method} failed {resp.status_code}: {resp.text[:500]}")
+                try:
+                    if self._engine:
+                        self._engine.state.push("error", f"Telegram {method} failed {resp.status_code}: {resp.text[:300]}")
+                except:
+                    pass
+                return data if data else {}
+        except Exception as exc:
+            if "409" in str(exc) or "Conflict" in str(exc):
+                return {"ok": False, "description": "Conflict"}
+            log.warning(f"Telegram {method} error: {exc}")
             return {}
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/{method}"
@@ -191,7 +220,7 @@ class TelegramReporter:
             log.warning(f"Send doc failed: {exc}")
 
     def send_trade_report(self, action: dict) -> None:
-        """FIXED54: Send individual trade report - PLAIN TEXT, no keyboard for reliability"""
+        """FIXED55: Send individual trade report - PLAIN TEXT, no keyboard for reliability"""
         if not self.enabled:
             return
         try:
@@ -201,9 +230,9 @@ class TelegramReporter:
                     version = self._engine.settings.version or version
             except:
                 pass
-            # FIXED54: Use plain text version to avoid HTML parse errors
+            # FIXED55: Use plain text version to avoid HTML parse errors
             text = format_single_trade(action, version)
-            # FIXED54: Try without keyboard first for reliability
+            # FIXED55: Try without keyboard first for reliability
             # Increment before attempt
             self.stats["trades_alerted"] += 1
             ok = self.send(text, reply_markup=None, parse_mode=None)
@@ -259,7 +288,7 @@ class TelegramReporter:
                 f"از دکمه‌های شیشه‌ای زیر استفاده کنید.\n"
                 f"• گزارش <b>معامله</b> فقط وقتی سفارش واقعی/خطا باشد\n"
                 f"• گزارش <b>کلی فایل</b> هر {self.full_report_hours:g} ساعت یا از دکمه\n"
-                f"• <b>جدید v018 FIXED54:</b> دکمه بستن برای هر معامله مجزا + 10 جفت ارز + تست فعال + polling فعال\n"
+                f"• <b>جدید v018 FIXED55:</b> دکمه بستن برای هر معامله مجزا + 10 جفت ارز + تست فعال + polling فعال\n"
             )
             if self._engine:
                 snap = self._engine.snapshot()
@@ -431,7 +460,7 @@ class TelegramReporter:
         self.version_history = self.version_history[-20:]
         self.current_version = new_version
         if self.enabled:
-            text = f"🔄 <b>آپدیت ورژن ربات</b>\n🕐 {utcnow()}\n\nاز: <b>{_esc(old_version)}</b>\nبه: <b>{_esc(new_version)}</b>\n\n📊 تغییرات v018 FIXED54:\n• فیکس polling تلگرام - حالا دستورات کار میکند\n• افزایش جفت ارزها از 5 به 10\n• فعال‌سازی معامله تست روی BTC\n• دکمه بستن برای هر معامله مجزا\n\n🔖 ورژن فعلی: {new_version}"
+            text = f"🔄 <b>آپدیت ورژن ربات</b>\n🕐 {utcnow()}\n\nاز: <b>{_esc(old_version)}</b>\nبه: <b>{_esc(new_version)}</b>\n\n📊 تغییرات v018 FIXED55:\n• فیکس polling تلگرام - حالا دستورات کار میکند\n• افزایش جفت ارزها از 5 به 10\n• فعال‌سازی معامله تست روی BTC\n• دکمه بستن برای هر معامله مجزا\n\n🔖 ورژن فعلی: {new_version}"
             self.send(text, reply_markup=self._kb())
 
     def answer_callback(self, callback_id: str, text: str, show_alert: bool = False):
@@ -545,7 +574,7 @@ class TelegramReporter:
             self.send(f"❌ {e}", reply_markup=self._kb())
 
     def _poll_loop(self):
-        log.info("telegram poll started FIXED54")
+        log.info("telegram poll started FIXED55")
         while not self._stop.is_set():
             try:
                 data = self._api("getUpdates", offset=self._offset, timeout=25, allowed_updates=["message", "callback_query"])
@@ -628,7 +657,7 @@ class TelegramReporter:
         self._poll_thread.start()
         self._bg_thread = threading.Thread(target=self._bg_loop, daemon=True, name="tg-bg")
         self._bg_thread.start()
-        log.info(f"Telegram FIXED54 started - polling enabled, close buttons active, version {self.current_version}")
+        log.info(f"Telegram FIXED55 started - polling enabled, close buttons active, version {self.current_version}")
         try:
             import time
             time.sleep(2)
@@ -652,8 +681,8 @@ def init_reporter_from_settings(settings) -> Optional[TelegramReporter]:
         dashboard_url="",
         full_report_hours=6.0,
     )
-    _reporter.current_version = getattr(settings, 'version', 'v018-10pairs-7sleeves-testtrade-close-FIXED54-SMART-TPSL-LADDER')
-    log.info(f"Telegram FIXED54 init version={_reporter.current_version} chat={settings.telegram_chat_id}")
+    _reporter.current_version = getattr(settings, 'version', 'v018-10pairs-7sleeves-testtrade-close-FIXED55-SMART-TPSL-LADDER')
+    log.info(f"Telegram FIXED55 init version={_reporter.current_version} chat={settings.telegram_chat_id}")
     return _reporter
 
 def get_reporter() -> Optional[TelegramReporter]:

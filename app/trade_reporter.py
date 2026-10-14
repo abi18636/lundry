@@ -1,12 +1,12 @@
 """
-FIXED54: Individual trade reporter - plain text for reliability
+FIXED55: Individual trade reporter - plain text for reliability
 """
 from __future__ import annotations
 import logging
 log = logging.getLogger("trade_reporter")
 
 def format_single_trade(action: dict, version: str = "v018") -> str:
-    """Format single trade - FIXED54 plain text without HTML to avoid parse errors"""
+    """Format single trade - FIXED55 plain text without HTML to avoid parse errors"""
     try:
         asset = str(action.get("asset","?"))[:20]
         inst = str(action.get("instrument","?"))[:20]
@@ -18,7 +18,6 @@ def format_single_trade(action: dict, version: str = "v018") -> str:
         status = str(action.get("status","?"))[:30]
         intent = str(action.get("intent","?"))[:20]
         
-        # Safe number formatting
         try:
             amount_str = f"{float(amount):.6f}"
         except:
@@ -32,7 +31,6 @@ def format_single_trade(action: dict, version: str = "v018") -> str:
         except:
             notional_str = str(notional)[:20]
         
-        # Simple emoji without HTML
         if direction == "buy":
             emoji = "BUY" if intent in ("open","increase") else "CLOSE SHORT"
         else:
@@ -47,20 +45,7 @@ def format_single_trade(action: dict, version: str = "v018") -> str:
             f"Notional: ${notional_str}",
             f"Type: {intent} Status: {status}",
             f"Order ID: {order_id}",
-            f"Close btn: close:{asset}",
         ]
         return "\n".join(lines)
     except Exception as e:
         return f"Trade {action.get('asset','?')} {action.get('direction','?')} {action.get('amount',0)} error:{e}"
-
-def format_single_trade_html(action: dict, version: str = "v018") -> str:
-    """HTML version - kept for reference but not used in FIXED54"""
-    try:
-        import html
-        def _esc(s):
-            return html.escape(str(s))[:200]
-        asset = _esc(action.get("asset","?"))
-        # ... same as before but not used
-        return f"Trade {asset}"
-    except:
-        return "Trade error"
