@@ -80,6 +80,7 @@ class BotState:
         self.events = (self.events + [{"ts": utcnow(), "kind": kind, "msg": msg, **extra}])[-300:]
 
 class TradingEngine:
+    reported_order_ids: set = set()
     def __init__(self, settings: Optional[Settings] = None):
         self.settings = settings or get_settings()
         self.state = BotState()
@@ -331,7 +332,7 @@ class TradingEngine:
             if atr <= 0 or entry_price <= 0 or side == 0:
                 return {"sl": None, "tp": None, "atr": None}
             s = self.settings
-            # FIXED55 SMART LADDER
+            # FIXED56 SMART LADDER
             if getattr(s, 'smart_tp_sl_enabled', True):
                 cfg = {
                     'sl_atr': getattr(s, 'smart_sl_atr', 2.0),
@@ -363,7 +364,7 @@ class TradingEngine:
         levels = self.state.position_sl_tp.get(asset)
         if not levels or not levels.get("sl"):
             return None
-        # FIXED55 SMART
+        # FIXED56 SMART
         try:
             if levels.get("tp1") is not None:
                 from app.smart_tp_sl import check_smart_triggers
@@ -385,7 +386,7 @@ class TradingEngine:
             if tp and current_price <= tp:
                 return f"take_profit TP={tp:.4f} L{levels.get('level',0)}"
         return None
-        # FIXED55: Use smart triggers if available
+        # FIXED56: Use smart triggers if available
         if levels.get("tp1") is not None:  # smart ladder
             result = check_smart_triggers(asset, current_price, levels)
             if result:
@@ -613,7 +614,7 @@ class TradingEngine:
             })
         self.state.net_book = net_book
         
-        # FIXED55: Auto-register SMART TP/SL for existing positions without SL/TP
+        # FIXED56: Auto-register SMART TP/SL for existing positions without SL/TP
         try:
             for inst, qty in inventory.items():
                 if abs(qty) < 1e-9:
@@ -654,7 +655,7 @@ class TradingEngine:
                 sl_tp_overrides[asset] = trigger
                 net_book[asset] = {**b, "target_coin": 0.0, "_sl_tp_override": trigger}
                 continue
-            # FIXED55 SMART TP/SL LADDER
+            # FIXED56 SMART TP/SL LADDER
             try:
                 pos_state = self.state.position_sl_tp.get(asset)
                 if pos_state:
@@ -942,8 +943,17 @@ class TradingEngine:
         return {"actions": actions, "diagnostics": self.state.diagnostics, "sleeves": self.state.sleeves, "net_book": net_book}
 
     def _log_fill(self, action: dict):
+        # FIXED56: deduplicate same order_id
+        oid = action.get("order_id")
+        if oid and oid in self._reported_order_ids:
+            return
+        if oid:
+            self._reported_order_ids.add(oid)
+            # Keep only last 100
+            if len(self._reported_order_ids) > 100:
+                self._reported_order_ids = set(list(self._reported_order_ids)[-100:])
         self.state.last_fill_at = utcnow()
-        # FIXED55: Send individual trade report - ULTRA ROBUST
+        # FIXED56: Send individual trade report - ULTRA ROBUST
         try:
             reporter = None
             # Try stored reporter first

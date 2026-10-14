@@ -1,12 +1,12 @@
 """
-FIXED55: Individual trade reporter - plain text for reliability
+FIXED56: Individual trade reporter - plain text for reliability
 """
 from __future__ import annotations
 import logging
 log = logging.getLogger("trade_reporter")
 
 def format_single_trade(action: dict, version: str = "v018") -> str:
-    """Format single trade - FIXED55 plain text without HTML to avoid parse errors"""
+    """Format single trade - FIXED56 plain text without HTML to avoid parse errors"""
     try:
         asset = str(action.get("asset","?"))[:20]
         inst = str(action.get("instrument","?"))[:20]
