@@ -66,7 +66,7 @@ class Settings(BaseSettings):
 
     # Telegram & Control
     dashboard_token: str = Field(default="")
-    telegram_enabled: bool = False
+    telegram_enabled: bool = True
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     state_path: str = "state/bot_state.json"

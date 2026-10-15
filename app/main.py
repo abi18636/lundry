@@ -27,7 +27,17 @@ engine = get_engine(settings)
 # Telegram reporter
 try:
     from app.telegram_bot import get_reporter, init_reporter
-    telegram_reporter = init_reporter(engine)
+    try:
+        telegram_reporter = init_reporter(engine)
+    except Exception as e2:
+        log.warning(f"Telegram init failed inner: {e2}")
+        telegram_reporter = None
+    # Force enabled if token exists
+    try:
+        if telegram_reporter and telegram_reporter.bot_token and telegram_reporter.chat_id:
+            telegram_reporter.enabled = True
+    except:
+        pass
     engine.set_telegram_reporter(telegram_reporter)
 except Exception as e:
     log.warning(f"Telegram init failed: {e}")
