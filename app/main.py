@@ -170,6 +170,29 @@ def api_status(authorization: Optional[str] = Header(None), x_token: Optional[st
         }
     }
 
+@app.get("/api/debug/env")
+def debug_env(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    import os
+    return {
+        "ok": True,
+        "env": {
+            "TELEGRAM_BOT_TOKEN_exists": bool(os.getenv("TELEGRAM_BOT_TOKEN")),
+            "TELEGRAM_BOT_TOKEN_len": len(os.getenv("TELEGRAM_BOT_TOKEN","")),
+            "TELEGRAM_CHAT_ID_exists": bool(os.getenv("TELEGRAM_CHAT_ID")),
+            "TELEGRAM_CHAT_ID_preview": (os.getenv("TELEGRAM_CHAT_ID","")[:3] + "...") if os.getenv("TELEGRAM_CHAT_ID") else None,
+            "TELEGRAM_ENABLED": os.getenv("TELEGRAM_ENABLED"),
+            "DASHBOARD_TOKEN_exists": bool(os.getenv("DASHBOARD_TOKEN")),
+            "ARIAX_API_KEY_exists": bool(os.getenv("ARIAX_API_KEY")),
+            "capital_usd": settings.capital_usd,
+            "telegram_bot_token_settings": bool(settings.telegram_bot_token),
+            "telegram_chat_id_settings": bool(settings.telegram_chat_id),
+            "telegram_enabled_settings": settings.telegram_enabled,
+        },
+        "build": BUILD,
+        "version": VERSION
+    }
+
 @app.get("/api/debug/telegram")
 def debug_telegram(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token)
