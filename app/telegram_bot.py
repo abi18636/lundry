@@ -219,10 +219,10 @@ class TelegramReporter:
         except Exception as exc:
             log.warning(f"Send doc failed: {exc}")
 
-    def send_trade_report(self, action: dict) -> None:
-        """FIXED56: Send individual trade report - PLAIN TEXT, no keyboard for reliability"""
+    def send_trade_report(self, action: dict) -> bool:
+        """CLEAN: Send trade report - plain text, returns bool, no duplicate stats"""
         if not self.enabled:
-            return
+            return False
         try:
             version = self.current_version
             try:
@@ -230,52 +230,31 @@ class TelegramReporter:
                     version = self._engine.settings.version or version
             except:
                 pass
-            # FIXED56: Use plain text version to avoid HTML parse errors
+            from app.trade_reporter import format_single_trade
             text = format_single_trade(action, version)
-            # FIXED56: Try without keyboard first for reliability
-            # Increment before attempt
             self.stats["trades_alerted"] += 1
             ok = self.send(text, reply_markup=None, parse_mode=None)
             if not ok:
-                # Fallback: try with HTML and keyboard
                 try:
-                    from app.trade_reporter import format_single_trade as fmt_plain
-                    # Try even simpler
                     simple_text = f"TRADE {action.get('asset','?')} {action.get('direction','?')} {action.get('filled_amount') or action.get('amount',0)} @ {action.get('price',0)} v{version}"
-                    ok2 = self.send(simple_text, reply_markup=None, parse_mode=None)
-                    if ok2:
-                        log_msg = f"Trade report sent via fallback plain: {action.get('asset')}"
-                    else:
-                        log_msg = f"Trade report failed both attempts: {action.get('asset')} failed={self.stats['failed']}"
-                except Exception as e2:
-                    log_msg = f"Trade report fallback error: {e2}"
-            else:
-                log_msg = f"Trade report sent OK plain: {action.get('asset')} sent={self.stats['sent']}"
-            
-            try:
-                import logging
-                logging.getLogger("telegram").info(log_msg)
-            except:
-                pass
-            # Journal
+                    ok = self.send(simple_text, reply_markup=None, parse_mode=None)
+                except:
+                    ok = False
             try:
                 self.journal.append({"ts": action.get("ts"), "asset": action.get("asset"), "type": "trade", "amount": action.get("filled_amount") or action.get("amount"), "ok": ok})
                 self.journal = self.journal[-100:]
             except:
                 pass
+            return bool(ok)
         except Exception as e:
-            import logging, traceback
-            logging.getLogger("telegram").warning(f"Trade report exception: {e} {traceback.format_exc()[:500]}")
+            import logging
+            logging.getLogger("telegram").warning(f"Trade report exception: {e}")
             try:
                 self.stats["trades_alerted"] += 1
                 self.stats["failed"] += 1
             except:
                 pass
-            try:
-                self.stats["trades_alerted"] += 1
-                self.stats["failed"] += 1
-            except:
-                pass
+            return False
 
     def send_panel(self, text: Optional[str] = None) -> None:
         if not self.enabled:
