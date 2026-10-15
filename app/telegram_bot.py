@@ -137,6 +137,8 @@ class TelegramReporter:
                     pass
                 return data if data else {}
         except Exception as exc:
+            self.last_error = f"Exception: {exc}"
+            self.last_error_text = str(clean.get('text',''))[:500] if 'clean' in locals() else "no clean"
             if "409" in str(exc) or "Conflict" in str(exc):
                 return {"ok": False, "description": "Conflict"}
             log.warning(f"Telegram {method} error: {exc}")
