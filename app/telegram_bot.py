@@ -47,6 +47,8 @@ class TelegramReporter:
         self._bg_thread = None
         self._offset = 0
         self.stats = {"cycles_ok": 0, "cycles_err": 0, "orders_ok": 0, "orders_skip": 0, "orders_err": 0, "trades_alerted": 0, "sent": 0, "failed": 0, "files_sent": 0}
+        self.last_error = None
+        self.last_error_text = None
         self.journal = []
         self._last_heartbeat = 0
         self._last_full_report = 0
@@ -112,6 +114,8 @@ class TelegramReporter:
                 data = {}
             if resp.status_code == 200:
                 if not data.get("ok"):
+                    self.last_error = str(data)[:1000]
+                    self.last_error_text = str(clean.get('text',''))[:500]
                     log.warning(f"Telegram {method} ok=False: {str(data)[:800]} text_len={len(str(clean.get('text','')))} text_preview={str(clean.get('text',''))[:200]}")
                     try:
                         if self._engine:
@@ -123,6 +127,8 @@ class TelegramReporter:
                 if resp.status_code == 409:
                     log.info(f"Telegram {method} 409 conflict - another instance polling")
                     return data if data else {"ok": False, "description": "Conflict"}
+                self.last_error = f"{resp.status_code}: {resp.text[:500]}"
+                self.last_error_text = str(clean.get('text',''))[:500]
                 log.warning(f"Telegram {method} failed {resp.status_code}: {resp.text[:800]} text={str(clean.get('text',''))[:200]}")
                 try:
                     if self._engine:

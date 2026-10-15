@@ -215,6 +215,8 @@ def debug_telegram(authorization: Optional[str] = Header(None), x_token: Optiona
             "chat_id_preview": str(reporter.chat_id)[:6] + "..." if reporter.chat_id else None,
             "poll_commands": True,
             "stats": reporter.stats,
+            "last_error": getattr(reporter, "last_error", None),
+            "last_error_text": getattr(reporter, "last_error_text", None),
             "build": BUILD,
             "version": VERSION
         }
