@@ -112,7 +112,6 @@ class TradingEngine:
         return self._async_client
 
     def _log_fill(self, action: dict):
-        # FIXED56 deduplication + v019 + async queue
         oid = action.get("order_id")
         if oid and oid in self._reported_order_ids:
             return
@@ -120,36 +119,44 @@ class TradingEngine:
             self._reported_order_ids.add(oid)
             if len(self._reported_order_ids) > 100:
                 self._reported_order_ids = set(list(self._reported_order_ids)[-100:])
-
         self.state.last_fill_at = utcnow()
         self.state.orders_log.append(action)
         self.state.orders_log = self.state.orders_log[-100:]
-
-        # v019 Fix: Queue telegram report instead of sending directly from async context
-        # Sending from async loop with sync httpx causes failure, so queue for main loop
         try:
-            if "ts" not in action:
-                action["ts"] = utcnow()
-            if "filled_amount" not in action and "amount" in action:
-                action["filled_amount"] = action["amount"]
-            self.pending_telegram_reports.append(action)
-            # Keep only last 20 pending
-            self.pending_telegram_reports = self.pending_telegram_reports[-20:]
-            self.state.push("info", f"📝 Trade queued for telegram: {action.get('asset')} {action.get('direction')} {action.get('filled_amount') or action.get('amount')} @ {action.get('price')}")
+            reporter = getattr(self, '_telegram_reporter', None)
+            if not reporter:
+                try:
+                    from app.telegram_bot import get_reporter
+                    reporter = get_reporter()
+                except Exception:
+                    reporter = None
+            if reporter and getattr(reporter, 'enabled', False):
+                if "ts" not in action:
+                    action["ts"] = utcnow()
+                if "filled_amount" not in action and "amount" in action:
+                    action["filled_amount"] = action["amount"]
+                try:
+                    ok = reporter.send_trade_report(action)
+                    if ok:
+                        self.state.push("info", f"✅ Trade report sent: {action.get('asset')} {action.get('direction')} {action.get('filled_amount') or action.get('amount')} @ {action.get('price')} | trades_alerted={reporter.stats.get('trades_alerted',0)}")
+                    else:
+                        self.state.push("error", f"❌ Trade report failed: {action.get('asset')} {action.get('direction')} err={getattr(reporter, 'last_error', 'unknown')}")
+                except Exception as e:
+                    self.state.push("error", f"send_trade_report failed: {e} for {action.get('asset')}")
         except Exception as e:
-            log.warning(f"Queue trade report failed: {e}")
-
+            import logging
+            logging.getLogger("engine").warning(f"Trade report failed: {e}")
         try:
             asset = action.get("asset")
             if asset:
                 self.state.last_trade_at[asset] = time.time()
-        except:
+        except Exception:
             pass
 
     def flush_telegram_reports(self):
-        """Called from main.py sync context after async cycle - sends queued reports"""
-        if not self.pending_telegram_reports:
-            return 0
+        return 0
+
+
         sent = 0
         try:
             reporter = getattr(self, '_telegram_reporter', None)
