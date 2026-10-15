@@ -22,6 +22,12 @@ BUILD = __import__("os").getenv("RENDER_GIT_COMMIT", "v019-TELEGRAM-RESTORED-a83
 VERSION = "v019-STABLE-ASYNC-MAKER-FIXED56"
 
 settings = get_settings()
+# v019 force dry_run True to bypass ARIAX 401 until keys restored
+try:
+    settings.dry_run = True
+    print(f"Forced dry_run True for testing")
+except:
+    pass
 # v019 force telegram enabled if tokens exist
 try:
     import os
