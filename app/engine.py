@@ -123,29 +123,16 @@ class TradingEngine:
         self.state.orders_log.append(action)
         self.state.orders_log = self.state.orders_log[-100:]
         try:
-            reporter = getattr(self, '_telegram_reporter', None)
-            if not reporter:
-                try:
-                    from app.telegram_bot import get_reporter
-                    reporter = get_reporter()
-                except Exception:
-                    reporter = None
-            if reporter and getattr(reporter, 'enabled', False):
-                if "ts" not in action:
-                    action["ts"] = utcnow()
-                if "filled_amount" not in action and "amount" in action:
-                    action["filled_amount"] = action["amount"]
-                try:
-                    ok = reporter.send_trade_report(action)
-                    if ok:
-                        self.state.push("info", f"✅ Trade report sent: {action.get('asset')} {action.get('direction')} {action.get('filled_amount') or action.get('amount')} @ {action.get('price')} | trades_alerted={reporter.stats.get('trades_alerted',0)}")
-                    else:
-                        self.state.push("error", f"❌ Trade report failed: {action.get('asset')} {action.get('direction')} err={getattr(reporter, 'last_error', 'unknown')}")
-                except Exception as e:
-                    self.state.push("error", f"send_trade_report failed: {e} for {action.get('asset')}")
+            if "ts" not in action:
+                action["ts"] = utcnow()
+            if "filled_amount" not in action and "amount" in action:
+                action["filled_amount"] = action["amount"]
+            self.pending_telegram_reports.append(action)
+            self.pending_telegram_reports = self.pending_telegram_reports[-20:]
+            self.state.push("info", f"📝 Trade queued: {action.get('asset')} {action.get('direction')} {action.get('amount')} @ {action.get('price')}")
         except Exception as e:
             import logging
-            logging.getLogger("engine").warning(f"Trade report failed: {e}")
+            logging.getLogger("engine").warning(f"Queue failed: {e}")
         try:
             asset = action.get("asset")
             if asset:
@@ -154,9 +141,8 @@ class TradingEngine:
             pass
 
     def flush_telegram_reports(self):
-        return 0
-
-
+        if not self.pending_telegram_reports:
+            return 0
         sent = 0
         try:
             reporter = getattr(self, '_telegram_reporter', None)
@@ -164,34 +150,28 @@ class TradingEngine:
                 try:
                     from app.telegram_bot import get_reporter
                     reporter = get_reporter()
-                except:
-                    pass
-            
+                except Exception:
+                    reporter = None
             if not reporter or not getattr(reporter, 'enabled', False):
-                # Clear queue if no reporter
                 self.pending_telegram_reports = []
                 return 0
-
-            # Send all pending reports from sync context (not async)
             reports = self.pending_telegram_reports[:]
             self.pending_telegram_reports = []
-            
             for action in reports:
                 try:
                     ok = reporter.send_trade_report(action)
                     if ok:
-                        self.state.push("info", f"✅ Trade report sent: {action.get('asset')} {action.get('direction')} {action.get('filled_amount') or action.get('amount')} @ {action.get('price')} | trades_alerted={reporter.stats.get('trades_alerted',0)}")
+                        self.state.push("info", f"✅ Trade report sent: {action.get('asset')} {action.get('direction')} {action.get('amount')} @ {action.get('price')}")
                         sent += 1
                     else:
-                        self.state.push("error", f"❌ Trade report failed: {action.get('asset')} {action.get('direction')} - {getattr(reporter, 'last_error', 'unknown')}")
+                        self.state.push("error", f"❌ Trade report failed: {action.get('asset')} err={getattr(reporter, 'last_error', 'unknown')}")
                 except Exception as e:
-                    self.state.push("error", f"send_trade_report failed: {e} for {action.get('asset')}")
-            
+                    self.state.push("error", f"flush failed {action.get('asset')}: {e}")
             return sent
         except Exception as e:
-            log.warning(f"Flush telegram reports failed: {e}")
+            import logging
+            logging.getLogger("engine").warning(f"Flush failed: {e}")
             return sent
-
 
     def _calculate_atr_levels(self, df: pd.DataFrame, entry_price: float, side: int):
         """Backward compat wrapper for old calls"""
