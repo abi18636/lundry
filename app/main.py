@@ -181,6 +181,17 @@ def api_status(authorization: Optional[str] = Header(None), x_token: Optional[st
         }
     }
 
+@app.get("/api/debug/file_hash")
+def debug_file_hash(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    import hashlib, pathlib
+    try:
+        content = pathlib.Path("app/telegram_bot.py").read_text()
+        h = hashlib.md5(content.encode()).hexdigest()[:12]
+        return {"ok": True, "telegram_bot_md5": h, "lines": len(content.splitlines()), "has_last_error": "last_error" in content, "has_init_reporter": "def init_reporter" in content}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 @app.get("/api/debug/env")
 def debug_env(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token)
