@@ -672,8 +672,8 @@ _reporter = None
 
 def init_reporter_from_settings(settings) -> Optional[TelegramReporter]:
     global _reporter
-    if not settings.telegram_enabled or not settings.telegram_bot_token or not settings.telegram_chat_id:
-        log.warning(f"Telegram disabled: enabled={settings.telegram_enabled} token={bool(settings.telegram_bot_token)} chat={bool(settings.telegram_chat_id)}")
+    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+        log.warning(f"Telegram disabled: token={bool(settings.telegram_bot_token)} chat={bool(settings.telegram_chat_id)} enabled={settings.telegram_enabled}")
         return None
     _reporter = TelegramReporter(
         bot_token=settings.telegram_bot_token,

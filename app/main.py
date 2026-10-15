@@ -22,6 +22,16 @@ BUILD = "v019-STABLE-ASYNC-MAKER"
 VERSION = "v019-STABLE-ASYNC-MAKER-FIXED56"
 
 settings = get_settings()
+# v019 force telegram enabled if tokens exist
+try:
+    import os
+    if os.getenv('TELEGRAM_BOT_TOKEN') and os.getenv('TELEGRAM_CHAT_ID'):
+        settings.telegram_enabled = True
+    # Also force if env var exists
+    if settings.telegram_bot_token and settings.telegram_chat_id:
+        settings.telegram_enabled = True
+except:
+    pass
 engine = get_engine(settings)
 
 # Telegram reporter
