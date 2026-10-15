@@ -685,5 +685,24 @@ def init_reporter_from_settings(settings) -> Optional[TelegramReporter]:
     log.info(f"Telegram FIXED56 init version={_reporter.current_version} chat={settings.telegram_chat_id}")
     return _reporter
 
+def init_reporter(engine=None) -> Optional[TelegramReporter]:
+    try:
+        if engine and hasattr(engine, 'settings'):
+            settings = engine.settings
+        else:
+            from app.config import get_settings
+            settings = get_settings()
+        reporter = init_reporter_from_settings(settings)
+        if reporter and engine:
+            try:
+                reporter.bind_engine(engine)
+            except:
+                pass
+        return reporter
+    except Exception as e:
+        import logging
+        logging.getLogger('telegram').warning(f'init_reporter failed: {e}')
+        return None
+
 def get_reporter() -> Optional[TelegramReporter]:
     return _reporter
