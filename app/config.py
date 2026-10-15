@@ -57,7 +57,7 @@ class Settings(BaseSettings):
 
     # v018 preserved
     trading_enabled: bool = True
-    dry_run: bool = False
+    dry_run: bool = True
     max_drawdown_pct: float = 0.15
     max_spread_bps: float = 30.0
     confluence_enabled: bool = True
