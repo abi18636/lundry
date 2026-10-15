@@ -185,14 +185,9 @@ class TelegramReporter:
                 return True
             else:
                 self.stats["failed"] += 1
-                if not self.last_error:
-                    self.last_error = f"send failed: {str(data)[:500]}"
-                    self.last_error_text = text[:500]
                 return False
         except Exception as exc:
             self.stats["failed"] += 1
-            self.last_error = f"send exception: {exc}"
-            self.last_error_text = text[:500]
             log.warning(f"Telegram send error: {exc}")
             return False
 
@@ -206,14 +201,9 @@ class TelegramReporter:
                 return True
             else:
                 self.stats["failed"] += 1
-                if not self.last_error:
-                    self.last_error = f"send failed: {str(data)[:500]}"
-                    self.last_error_text = text[:500]
                 return False
         except Exception as exc:
             self.stats["failed"] += 1
-            self.last_error = f"send exception: {exc}"
-            self.last_error_text = text[:500]
             log.warning(f"Telegram send error: {exc}")
             return False
 
