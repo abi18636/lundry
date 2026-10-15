@@ -18,7 +18,7 @@ from app.engine import get_engine
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(levelname)s %(message)s')
 log = logging.getLogger("main_v019")
 
-BUILD = "v019-STABLE-ASYNC-MAKER"
+BUILD = __import__("os").getenv("RENDER_GIT_COMMIT", "v019-TELEGRAM-RESTORED-a83e042")
 VERSION = "v019-STABLE-ASYNC-MAKER-FIXED56"
 
 settings = get_settings()
