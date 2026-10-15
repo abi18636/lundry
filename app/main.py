@@ -183,6 +183,28 @@ def api_status(authorization: Optional[str] = Header(None), x_token: Optional[st
         }
     }
 
+@app.get("/api/debug/flush")
+def debug_flush(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
+    _check_token(authorization, x_token)
+    try:
+        # Queue a test trade
+        engine.pending_telegram_reports.append({
+            "asset": "TEST",
+            "direction": "buy",
+            "amount": 0.001,
+            "price": 80000.0,
+            "notional_usd": 80.0,
+            "order_id": f"test_flush_{__import__('time').time()}",
+            "ts": "2026-10-15T00:00:00"
+        })
+        sent = engine.flush_telegram_reports()
+        from app.telegram_bot import get_reporter
+        reporter = get_reporter()
+        return {"ok": True, "sent": sent, "stats": reporter.stats if reporter else None, "last_error": getattr(reporter, 'last_error', None), "build": BUILD}
+    except Exception as e:
+        import traceback
+        return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}
+
 @app.get("/api/debug/file_hash")
 def debug_file_hash(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token)
