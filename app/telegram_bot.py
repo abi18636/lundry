@@ -47,8 +47,6 @@ class TelegramReporter:
         self._bg_thread = None
         self._offset = 0
         self.stats = {"cycles_ok": 0, "cycles_err": 0, "orders_ok": 0, "orders_skip": 0, "orders_err": 0, "trades_alerted": 0, "sent": 0, "failed": 0, "files_sent": 0}
-        self.last_error = None
-        self.last_error_text = None
         self.journal = []
         self._last_heartbeat = 0
         self._last_full_report = 0
@@ -102,7 +100,6 @@ class TelegramReporter:
 
     def _api(self, method: str, as_json: bool = False, count_stats: bool = True, **params):
         if not self.enabled:
-            self.last_error = "disabled"
             return {}
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/{method}"
@@ -114,25 +111,63 @@ class TelegramReporter:
                 data = {}
             if resp.status_code == 200:
                 if not data.get("ok"):
-                    self.last_error = str(data)[:1000]
-                    self.last_error_text = str(clean.get('text',''))[:500]
+                    log.warning(f"Telegram {method} ok=False: {str(data)[:500]}")
                 return data
             else:
-                self.last_error = f"{resp.status_code}: {resp.text[:500]}"
-                self.last_error_text = str(clean.get('text',''))[:500]
-                if resp.status_code != 409:
-                    log.warning(f"Telegram {method} failed {resp.status_code}: {resp.text[:500]}")
-                return data if data else {"ok": False, "description": f"HTTP {resp.status_code}"}
+                # For 409 conflict, return data with description but don't log as error
+                if resp.status_code == 409:
+                    log.info(f"Telegram {method} 409 conflict - another instance polling")
+                    return data if data else {"ok": False, "description": "Conflict"}
+                log.warning(f"Telegram {method} failed {resp.status_code}: {resp.text[:500]}")
+                try:
+                    if self._engine:
+                        self._engine.state.push("error", f"Telegram {method} failed {resp.status_code}: {resp.text[:300]}")
+                except:
+                    pass
+                return data if data else {}
         except Exception as exc:
-            self.last_error = f"Exception: {exc}"
-            if "409" not in str(exc):
-                log.warning(f"Telegram {method} error: {exc}")
-            return {"ok": False, "description": str(exc)}
-
+            if "409" in str(exc) or "Conflict" in str(exc):
+                return {"ok": False, "description": "Conflict"}
+            log.warning(f"Telegram {method} error: {exc}")
+            return {}
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/{method}"
+            clean = {k: v for k, v in params.items() if v is not None}
+            try:
+                tl = len(str(clean.get('text','')))
+                log.info(f"Telegram {method} text_len={tl}")
+            except:
+                pass
+            resp = httpx.post(url, json=clean, timeout=30)
+            if resp.status_code == 200:
+                data = resp.json()
+                if not data.get("ok"):
+                    log.warning(f"Telegram {method} ok=False: {str(data)[:500]}")
+                    try:
+                        if self._engine:
+                            self._engine.state.push("error", f"Telegram {method} ok=False: {str(data)[:400]}")
+                    except:
+                        pass
+                return data
+            else:
+                log.warning(f"Telegram {method} failed {resp.status_code}: {resp.text[:500]}")
+                try:
+                    if self._engine:
+                        self._engine.state.push("error", f"Telegram {method} failed {resp.status_code}: {resp.text[:400]}")
+                except:
+                    pass
+                return {}
+        except Exception as exc:
+            log.warning(f"Telegram {method} error: {exc}")
+            try:
+                if self._engine:
+                    self._engine.state.push("error", f"Telegram {method} exception: {exc}")
+            except:
+                pass
+            return {}
 
     def send(self, text: str, reply_markup: dict = None, parse_mode: str = None) -> bool:
         if not self.enabled:
-            self.last_error = "send disabled"
             return False
         try:
             if len(text) > 3500:
@@ -148,17 +183,27 @@ class TelegramReporter:
                 return True
             else:
                 self.stats["failed"] += 1
-                if not self.last_error:
-                    self.last_error = f"send failed: {str(data)[:800]}"
-                    self.last_error_text = text[:500]
                 return False
         except Exception as exc:
             self.stats["failed"] += 1
-            self.last_error = f"send exception: {exc}"
-            self.last_error_text = text[:500]
             log.warning(f"Telegram send error: {exc}")
             return False
 
+        try:
+            payload = {"chat_id": self.chat_id, "text": text, "parse_mode": parse_mode}
+            if reply_markup:
+                payload["reply_markup"] = json.dumps(reply_markup)
+            data = self._api("sendMessage", **payload)
+            if data.get("ok"):
+                self.stats["sent"] += 1
+                return True
+            else:
+                self.stats["failed"] += 1
+                return False
+        except Exception as exc:
+            self.stats["failed"] += 1
+            log.warning(f"Telegram send error: {exc}")
+            return False
 
     def send_document(self, fname: str, content: str, caption: str = ""):
         if not self.enabled:
@@ -627,7 +672,7 @@ _reporter = None
 
 def init_reporter_from_settings(settings) -> Optional[TelegramReporter]:
     global _reporter
-    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+    if not settings.telegram_enabled or not settings.telegram_bot_token or not settings.telegram_chat_id:
         log.warning(f"Telegram disabled: enabled={settings.telegram_enabled} token={bool(settings.telegram_bot_token)} chat={bool(settings.telegram_chat_id)}")
         return None
     _reporter = TelegramReporter(
@@ -639,25 +684,6 @@ def init_reporter_from_settings(settings) -> Optional[TelegramReporter]:
     _reporter.current_version = getattr(settings, 'version', 'v018-10pairs-7sleeves-testtrade-close-FIXED56-SMART-TPSL-LADDER')
     log.info(f"Telegram FIXED56 init version={_reporter.current_version} chat={settings.telegram_chat_id}")
     return _reporter
-
-def init_reporter(engine=None) -> Optional[TelegramReporter]:
-    try:
-        if engine and hasattr(engine, 'settings'):
-            settings = engine.settings
-        else:
-            from app.config import get_settings
-            settings = get_settings()
-        reporter = init_reporter_from_settings(settings)
-        if reporter and engine:
-            try:
-                reporter.bind_engine(engine)
-            except:
-                pass
-        return reporter
-    except Exception as e:
-        import logging
-        logging.getLogger('telegram').warning(f'init_reporter failed: {e}')
-        return None
 
 def get_reporter() -> Optional[TelegramReporter]:
     return _reporter
