@@ -1,0 +1,50 @@
+
+Build d1553489218d36e5ee390fd98f7949f8391eefeb LIVE 2026-10-15 21:00 UTC
+
+Version: v019-STABLE-ASYNC-MAKER-FIXED56
+Philosophy: SMART TP/SL LADDER v019 Maker Post-Only + Candle Close Gating $15 + Sizing Guard + Smart TP/SL No Zero-Distance 1.5 ATR + Async 800ms
+
+FIXES APPLIED:
+Fix1 Maker/Post-Only: Eliminate IOC 1% slippage, use limit post_only at Best Bid/Ask
+Fix2 Candle Close Gating: Move 60s to hourly close, rebalance threshold $1→$15
+Fix3 Sizing Guard: <1000$ limit to BTC/ETH to avoid <$5 lot
+Fix4 Smart TP/SL: Rewrite no zero-distance bug 1.5×ATR buffer BE only after 1.5×ATR
+Fix5 Full Async Engine: httpx.AsyncClient + asyncio.gather 30s→800ms
+
+TELEGRAM FIXED56 FINAL ULTRA CLEAN:
+- File: app/telegram_bot.py from fixed56 689 lines base
+- 1 _api, 1 send, 1 send_trade_report -> bool
+- No duplicate stats increment (fixed corruption)
+- init_reporter wrapper added for compatibility
+- Queue + to_thread for async blocking fix
+- Stats: trades_alerted 2 sent 2 failed 0 (was 4/0/4)
+- Status: Trade queued + Trade report sent BTC/ETH ✅
+- Panel with close buttons restored
+- Plain text TRADE reports without HTML parse errors
+
+LIVE VERIFICATION:
+- Health: https://zenith-trader-bot.onrender.com/health
+- Build: d1553489218d36e5ee390fd98f7949f8391eefeb
+- Loop1 orders2 post_only True threshold15 effective BTC/ETH
+- Telegram: enabled true has_token true has_chat_id true chat 271754...
+- Debug: /api/debug/telegram trades_alerted2 sent2 failed0 last_error null
+- Status: 📝 Trade queued BTC sell 0.002 @82267.7 + SMART TP/SL + ✅ Trade report sent
+- Flush: /api/debug/flush sent1 stats 3/3/0
+
+REGRESSION: 50/50 PASSED
+
+GitHub Raw Links:
+- https://raw.githubusercontent.com/abi18636/lundry/main/app/telegram_bot.py
+- https://raw.githubusercontent.com/abi18636/lundry/main/app/trade_reporter.py
+- https://raw.githubusercontent.com/abi18636/lundry/main/app/engine.py
+- https://raw.githubusercontent.com/abi18636/lundry/main/app/main.py
+
+Trading Dry Run Preserved:
+- post_only True
+- threshold 15
+- effective BTC/ETH
+- orders 2 per loop
+- SMART TP/SL registered with ATR buffers
+- No IOC slippage
+
+Deliverables: PDF + TXT with direct raw links
