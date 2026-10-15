@@ -188,6 +188,31 @@ class TelegramReporter:
 
     def send(self, text: str, reply_markup: dict = None, parse_mode: str = None) -> bool:
         if not self.enabled:
+            self.last_error = "send disabled"
+            return False
+        try:
+            if len(text) > 3500:
+                text = text[:3500] + "...truncated"
+            payload = {"chat_id": self.chat_id, "text": text}
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            if reply_markup:
+                payload["reply_markup"] = json.dumps(reply_markup)
+            data = self._api("sendMessage", **payload)
+            if data.get("ok"):
+                self.stats["sent"] += 1
+                return True
+            else:
+                self.stats["failed"] += 1
+                if not self.last_error:
+                    self.last_error = f"send failed no ok: {str(data)[:800]}"
+                    self.last_error_text = text[:500]
+                return False
+        except Exception as exc:
+            self.stats["failed"] += 1
+            self.last_error = f"send exception: {exc}"
+            self.last_error_text = text[:500]
+            log.warning(f"Telegram send error: {exc}")
             return False
         try:
             if len(text) > 3500:
