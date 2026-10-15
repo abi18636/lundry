@@ -125,6 +125,8 @@ class TelegramReporter:
                 return data
             else:
                 if resp.status_code == 409:
+                    self.last_error = f"409 Conflict: {str(data)[:500]}"
+                    self.last_error_text = str(clean.get('text',''))[:500]
                     log.info(f"Telegram {method} 409 conflict - another instance polling")
                     return data if data else {"ok": False, "description": "Conflict"}
                 self.last_error = f"{resp.status_code}: {resp.text[:500]}"
@@ -186,6 +188,31 @@ class TelegramReporter:
 
     def send(self, text: str, reply_markup: dict = None, parse_mode: str = None) -> bool:
         if not self.enabled:
+            return False
+        try:
+            if len(text) > 3500:
+                text = text[:3500] + "...truncated"
+            payload = {"chat_id": self.chat_id, "text": text}
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            if reply_markup:
+                payload["reply_markup"] = json.dumps(reply_markup)
+            data = self._api("sendMessage", **payload)
+            if data.get("ok"):
+                self.stats["sent"] += 1
+                return True
+            else:
+                self.stats["failed"] += 1
+                # Store error if _api didn't already
+                if not self.last_error:
+                    self.last_error = f"send failed: {str(data)[:500]}"
+                    self.last_error_text = text[:500]
+                return False
+        except Exception as exc:
+            self.stats["failed"] += 1
+            self.last_error = f"send exception: {exc}"
+            self.last_error_text = text[:500]
+            log.warning(f"Telegram send error: {exc}")
             return False
         try:
             if len(text) > 3500:
