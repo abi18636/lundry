@@ -81,6 +81,7 @@ class TradingEngine:
         self.last_candle_checked: Dict[str, str] = {}
         self._telegram_reporter = None
         self._reported_order_ids = set()
+        self.pending_telegram_reports = []
         self._async_client: AriaXAsyncClient | None = None
         self._sync_client: AriaXClient | None = None
         self._last_async_market = {}
@@ -111,7 +112,7 @@ class TradingEngine:
         return self._async_client
 
     def _log_fill(self, action: dict):
-        # FIXED56 deduplication + v019
+        # FIXED56 deduplication + v019 + async queue
         oid = action.get("order_id")
         if oid and oid in self._reported_order_ids:
             return
@@ -124,7 +125,32 @@ class TradingEngine:
         self.state.orders_log.append(action)
         self.state.orders_log = self.state.orders_log[-100:]
 
-        # Telegram report - FIXED56 plain text
+        # v019 Fix: Queue telegram report instead of sending directly from async context
+        # Sending from async loop with sync httpx causes failure, so queue for main loop
+        try:
+            if "ts" not in action:
+                action["ts"] = utcnow()
+            if "filled_amount" not in action and "amount" in action:
+                action["filled_amount"] = action["amount"]
+            self.pending_telegram_reports.append(action)
+            # Keep only last 20 pending
+            self.pending_telegram_reports = self.pending_telegram_reports[-20:]
+            self.state.push("info", f"📝 Trade queued for telegram: {action.get('asset')} {action.get('direction')} {action.get('filled_amount') or action.get('amount')} @ {action.get('price')}")
+        except Exception as e:
+            log.warning(f"Queue trade report failed: {e}")
+
+        try:
+            asset = action.get("asset")
+            if asset:
+                self.state.last_trade_at[asset] = time.time()
+        except:
+            pass
+
+    def flush_telegram_reports(self):
+        """Called from main.py sync context after async cycle - sends queued reports"""
+        if not self.pending_telegram_reports:
+            return 0
+        sent = 0
         try:
             reporter = getattr(self, '_telegram_reporter', None)
             if not reporter:
@@ -134,25 +160,31 @@ class TradingEngine:
                 except:
                     pass
             
-            if reporter and getattr(reporter, 'enabled', False):
-                if "ts" not in action:
-                    action["ts"] = utcnow()
-                if "filled_amount" not in action and "amount" in action:
-                    action["filled_amount"] = action["amount"]
+            if not reporter or not getattr(reporter, 'enabled', False):
+                # Clear queue if no reporter
+                self.pending_telegram_reports = []
+                return 0
+
+            # Send all pending reports from sync context (not async)
+            reports = self.pending_telegram_reports[:]
+            self.pending_telegram_reports = []
+            
+            for action in reports:
                 try:
-                    reporter.send_trade_report(action)
-                    self.state.push("info", f"✅ Trade report sent: {action.get('asset')} {action.get('direction')} {action.get('filled_amount') or action.get('amount')} @ {action.get('price')} | trades_alerted={reporter.stats.get('trades_alerted',0)}")
+                    ok = reporter.send_trade_report(action)
+                    if ok:
+                        self.state.push("info", f"✅ Trade report sent: {action.get('asset')} {action.get('direction')} {action.get('filled_amount') or action.get('amount')} @ {action.get('price')} | trades_alerted={reporter.stats.get('trades_alerted',0)}")
+                        sent += 1
+                    else:
+                        self.state.push("error", f"❌ Trade report failed: {action.get('asset')} {action.get('direction')} - {getattr(reporter, 'last_error', 'unknown')}")
                 except Exception as e:
                     self.state.push("error", f"send_trade_report failed: {e} for {action.get('asset')}")
+            
+            return sent
         except Exception as e:
-            log.warning(f"Trade report failed: {e}")
+            log.warning(f"Flush telegram reports failed: {e}")
+            return sent
 
-        try:
-            asset = action.get("asset")
-            if asset:
-                self.state.last_trade_at[asset] = time.time()
-        except:
-            pass
 
     def _calculate_atr_levels(self, df: pd.DataFrame, entry_price: float, side: int):
         """Backward compat wrapper for old calls"""

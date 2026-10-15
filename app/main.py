@@ -69,6 +69,11 @@ async def trading_loop():
             start = time.time()
             # Run async cycle
             await engine.run_cycle_async()
+            # v019 Fix: Flush queued telegram reports from sync context
+            try:
+                engine.flush_telegram_reports()
+            except Exception as e:
+                log.warning(f"Flush telegram failed: {e}")
             elapsed = time.time() - start
             log.info(f"Cycle done in {elapsed:.3f}s - next in {settings.loop_seconds}s")
             
