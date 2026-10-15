@@ -102,32 +102,7 @@ class TelegramReporter:
 
     def _api(self, method: str, as_json: bool = False, count_stats: bool = True, **params):
         if not self.enabled:
-            self.last_error = "disabled"
             return {}
-        try:
-            url = f"https://api.telegram.org/bot{self.bot_token}/{method}"
-            clean = {k: v for k, v in params.items() if v is not None}
-            resp = httpx.post(url, json=clean, timeout=30)
-            try:
-                data = resp.json()
-            except:
-                data = {}
-            if resp.status_code == 200:
-                if not data.get("ok"):
-                    self.last_error = str(data)[:1000]
-                    self.last_error_text = str(clean.get('text',''))[:500]
-                return data
-            else:
-                self.last_error = f"{resp.status_code}: {resp.text[:500]}"
-                self.last_error_text = str(clean.get('text',''))[:500]
-                if resp.status_code != 409:
-                    log.warning(f"Telegram {method} failed {resp.status_code}: {resp.text[:500]}")
-                return data if data else {"ok": False, "description": f"HTTP {resp.status_code}"}
-        except Exception as exc:
-            self.last_error = f"Exception: {exc}"
-            if "409" not in str(exc):
-                log.warning(f"Telegram {method} error: {exc}")
-            return {"ok": False, "description": str(exc)}
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/{method}"
             clean = {k: v for k, v in params.items() if v is not None}
@@ -195,7 +170,6 @@ class TelegramReporter:
 
     def send(self, text: str, reply_markup: dict = None, parse_mode: str = None) -> bool:
         if not self.enabled:
-            self.last_error = "send disabled"
             return False
         try:
             if len(text) > 3500:
@@ -211,16 +185,7 @@ class TelegramReporter:
                 return True
             else:
                 self.stats["failed"] += 1
-                if not self.last_error:
-                    self.last_error = f"send failed: {str(data)[:800]}"
-                    self.last_error_text = text[:500]
                 return False
-        except Exception as exc:
-            self.stats["failed"] += 1
-            self.last_error = f"send exception: {exc}"
-            self.last_error_text = text[:500]
-            log.warning(f"Telegram send error: {exc}")
-            return False
         except Exception as exc:
             self.stats["failed"] += 1
             log.warning(f"Telegram send error: {exc}")
