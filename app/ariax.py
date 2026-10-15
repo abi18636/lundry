@@ -402,3 +402,142 @@ class AriaXClient:
             return data
         except Exception as e:
             raise e
+
+
+# === v019 ASYNC CLIENT (Fix 5) ===
+import asyncio as _asyncio
+
+class AriaXAPIError(Exception):
+    def __init__(self, path: str, code, msg: str):
+        self.path = path
+        self.code = code
+        super().__init__(f"{path} [{code}]: {msg}")
+
+class AriaXAsyncClient:
+    def __init__(self, base_url: str, api_key: str, api_secret: str, fallback_url: str = None):
+        self.base_url = (base_url or "").rstrip("/")
+        self.fallback_url = (fallback_url or self.base_url).rstrip("/")
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self._http = None
+    
+    def _get_http(self):
+        if self._http is None:
+            import httpx
+            self._http = httpx.AsyncClient(timeout=10.0)
+        return self._http
+
+    async def close(self):
+        if self._http:
+            await self._http.aclose()
+            self._http = None
+
+    async def _request(self, method: str, path: str, params=None, json_body=None, is_public: bool = False) -> dict:
+        import httpx
+        http = self._get_http()
+        urls = [self.base_url, self.fallback_url] if self.fallback_url != self.base_url else [self.base_url]
+        last_exc = None
+        
+        headers = {}
+        if not is_public:
+            headers = {"X-API-Key": self.api_key, "X-API-Secret": self.api_secret}
+
+        for base in urls:
+            url = f"{base}{path}"
+            try:
+                resp = await http.request(method, url, params=params, json=json_body, headers=headers)
+                if resp.status_code >= 400:
+                    raise AriaXAPIError(path, resp.status_code, f"HTTP {resp.status_code}")
+                data = resp.json()
+                if isinstance(data, dict) and data.get("retCode", 0) != 0:
+                    raise AriaXAPIError(path, data.get("retCode"), data.get("retMsg", "Unknown Error"))
+                return data
+            except Exception as exc:
+                last_exc = exc
+                continue
+
+        raise last_exc or AriaXAPIError(path, -1, "All endpoints failed")
+
+    async def order_book(self, instrument: str, depth: int = 5) -> dict:
+        try:
+            import time
+            data = await self._request("GET", "/v5/market/orderbook", params={"category": "linear", "symbol": instrument, "limit": depth}, is_public=True)
+            res = data.get("result", {})
+            bids = [[float(p), float(q)] for p, q in res.get("b", [])]
+            asks = [[float(p), float(q)] for p, q in res.get("a", [])]
+            return {
+                "bids": bids, "asks": asks,
+                "timestamp": res.get("ts", int(time.time() * 1000)),
+                "best_bid": bids[0][0] if bids else 0.0,
+                "best_ask": asks[0][0] if asks else 0.0,
+                "state": "open" if bids and asks else "closed"
+            }
+        except Exception as e:
+            import logging
+            logging.getLogger("ariax_async").error(f"Failed to fetch orderbook for {instrument}: {e}")
+            return {"bids": [], "asks": [], "best_bid": 0.0, "best_ask": 0.0, "state": "unknown"}
+
+    async def candles(self, instrument: str, hours: int = 150):
+        try:
+            import pandas as pd
+            data = await self._request("GET", "/v5/market/kline", params={"category": "linear", "symbol": instrument, "interval": "60", "limit": hours}, is_public=True)
+            rows = data.get("result", {}).get("list", [])
+            if not rows:
+                return pd.DataFrame()
+            df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume", "turnover"])
+            for col in ["open", "high", "low", "close", "volume"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            df["dt"] = pd.to_datetime(pd.to_numeric(df["timestamp"]), unit="ms", utc=True)
+            return df.sort_values("dt").reset_index(drop=True)[["dt", "open", "high", "low", "close", "volume"]]
+        except Exception as exc:
+            import logging
+            logging.getLogger("ariax_async").warning(f"Failed to fetch candles for {instrument}: {exc}")
+            import pandas as pd
+            return pd.DataFrame()
+
+    async def account_summary(self, currency: str = "USDT") -> dict:
+        try:
+            data = await self._request("GET", "/api/wallet", is_public=False)
+            equity = float(data.get("equity") or 0.0)
+            available = float(data.get("free_margin") or data.get("available") or 0.0)
+            return {currency: {"equity": equity, "available": available}}
+        except Exception as exc:
+            import logging
+            logging.getLogger("ariax_async").warning(f"Account fetch failed: {exc}")
+            return {currency: {"equity": 0.0, "available": 0.0}}
+
+    async def positions(self, currency: str = "USDT"):
+        try:
+            data = await self._request("GET", "/api/positions", is_public=False)
+            raw = data.get("data", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            normalized = []
+            for p in raw:
+                size = float(p.get("size") or p.get("size_currency") or 0.0)
+                if abs(size) < 1e-8:
+                    continue
+                normalized.append({
+                    "instrument_name": p.get("symbol") or p.get("instrument_name"),
+                    "size": size,
+                    "direction": "buy" if size > 0 else "sell",
+                    "average_price": float(p.get("entry") or p.get("average_price") or 0.0),
+                    "mark_price": float(p.get("mark") or p.get("mark_price") or 0.0),
+                    "floating_profit_loss": float(p.get("upnl") or 0.0)
+                })
+            return normalized
+        except Exception as exc:
+            import logging
+            logging.getLogger("ariax_async").warning(f"Positions fetch failed: {exc}")
+            return []
+
+    async def place_order(self, symbol: str, side: str, qty: float, price: float, post_only: bool = True, reduce_only: bool = False) -> dict:
+        """Fix 1: Maker Post-Only order execution"""
+        body = {
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "type": "Limit",
+            "post_only": post_only,
+            "reduce_only": reduce_only
+        }
+        return await self._request("POST", "/api/order", json_body=body, is_public=False)
