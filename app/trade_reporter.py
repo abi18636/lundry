@@ -1,17 +1,51 @@
-def format_single_trade(action: dict, version: str = "v019") -> str:
+"""
+FIXED56: Individual trade reporter - plain text for reliability
+"""
+from __future__ import annotations
+import logging
+log = logging.getLogger("trade_reporter")
+
+def format_single_trade(action: dict, version: str = "v018") -> str:
+    """Format single trade - FIXED56 plain text without HTML to avoid parse errors"""
     try:
-        asset = str(action.get("asset","?"))[:10]
-        direction = str(action.get("direction","?"))[:10]
+        asset = str(action.get("asset","?"))[:20]
+        inst = str(action.get("instrument","?"))[:20]
+        direction = str(action.get("direction","?"))
         amount = action.get("filled_amount") or action.get("amount",0)
-        price = action.get("price") or 0
+        price = action.get("price") or action.get("limit_price",0)
+        notional = action.get("notional_usd",0)
+        order_id = str(action.get("order_id","?"))[:30]
+        status = str(action.get("status","?"))[:30]
+        intent = str(action.get("intent","?"))[:20]
+        
         try:
-            amount_str = f"{float(amount):.4f}"
+            amount_str = f"{float(amount):.6f}"
         except:
-            amount_str = str(amount)[:10]
+            amount_str = str(amount)[:20]
         try:
-            price_str = f"{float(price):.2f}"
+            price_str = f"{float(price):.4f}"
         except:
-            price_str = str(price)[:10]
-        return f"TRADE {version} {asset} {direction} {amount_str} @ {price_str}"
-    except:
-        return f"TRADE {action.get('asset','?')} {action.get('direction','?')}"
+            price_str = str(price)[:20]
+        try:
+            notional_str = f"{float(notional):.2f}"
+        except:
+            notional_str = str(notional)[:20]
+        
+        if direction == "buy":
+            emoji = "BUY" if intent in ("open","increase") else "CLOSE SHORT"
+        else:
+            emoji = "SELL" if intent in ("open","increase") else "CLOSE LONG"
+        
+        lines = [
+            f"TRADE {version} - {asset} {emoji}",
+            f"Time: {action.get('ts','')}",
+            f"Version: {version}",
+            f"Instrument: {inst}",
+            f"Amount: {amount_str} @ {price_str}",
+            f"Notional: ${notional_str}",
+            f"Type: {intent} Status: {status}",
+            f"Order ID: {order_id}",
+        ]
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Trade {action.get('asset','?')} {action.get('direction','?')} {action.get('amount',0)} error:{e}"
