@@ -69,18 +69,20 @@ async def trading_loop():
             start = time.time()
             # Run async cycle
             await engine.run_cycle_async()
-            # v019 Fix: Flush queued telegram reports from sync context
+            # v019 Fix: Flush queued telegram reports via thread to avoid blocking async loop
             try:
-                engine.flush_telegram_reports()
+                import asyncio
+                await asyncio.to_thread(engine.flush_telegram_reports)
             except Exception as e:
                 log.warning(f"Flush telegram failed: {e}")
             elapsed = time.time() - start
             log.info(f"Cycle done in {elapsed:.3f}s - next in {settings.loop_seconds}s")
             
-            # Poll telegram commands
+            # Poll telegram commands via thread to avoid blocking
             if telegram_reporter and getattr(telegram_reporter, 'enabled', False):
                 try:
-                    telegram_reporter.poll_commands()
+                    import asyncio
+                    await asyncio.to_thread(telegram_reporter.poll_commands)
                 except Exception as e:
                     log.warning(f"Telegram poll failed: {e}")
             
