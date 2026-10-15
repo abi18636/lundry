@@ -104,6 +104,7 @@ class TelegramReporter:
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/{method}"
             clean = {k: v for k, v in params.items() if v is not None}
+            import httpx
             resp = httpx.post(url, json=clean, timeout=30)
             try:
                 data = resp.json()
@@ -111,17 +112,21 @@ class TelegramReporter:
                 data = {}
             if resp.status_code == 200:
                 if not data.get("ok"):
-                    log.warning(f"Telegram {method} ok=False: {str(data)[:500]}")
+                    log.warning(f"Telegram {method} ok=False: {str(data)[:800]} text_len={len(str(clean.get('text','')))} text_preview={str(clean.get('text',''))[:200]}")
+                    try:
+                        if self._engine:
+                            self._engine.state.push("error", f"Telegram {method} ok=False: {str(data)[:500]} text={str(clean.get('text',''))[:200]}")
+                    except:
+                        pass
                 return data
             else:
-                # For 409 conflict, return data with description but don't log as error
                 if resp.status_code == 409:
                     log.info(f"Telegram {method} 409 conflict - another instance polling")
                     return data if data else {"ok": False, "description": "Conflict"}
-                log.warning(f"Telegram {method} failed {resp.status_code}: {resp.text[:500]}")
+                log.warning(f"Telegram {method} failed {resp.status_code}: {resp.text[:800]} text={str(clean.get('text',''))[:200]}")
                 try:
                     if self._engine:
-                        self._engine.state.push("error", f"Telegram {method} failed {resp.status_code}: {resp.text[:300]}")
+                        self._engine.state.push("error", f"Telegram {method} failed {resp.status_code}: {resp.text[:500]}")
                 except:
                     pass
                 return data if data else {}
@@ -129,6 +134,11 @@ class TelegramReporter:
             if "409" in str(exc) or "Conflict" in str(exc):
                 return {"ok": False, "description": "Conflict"}
             log.warning(f"Telegram {method} error: {exc}")
+            try:
+                if self._engine:
+                    self._engine.state.push("error", f"Telegram {method} exception: {exc}")
+            except:
+                pass
             return {}
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/{method}"
