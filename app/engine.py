@@ -588,13 +588,51 @@ class TradingEngine:
             return False
 
     def close_position(self, asset: str):
-        """v018 compat - close position"""
-        self.state.push("info", f"Close position requested for {asset}")
-        if asset in self.positions_state:
-            self.positions_state.pop(asset)
-        if asset in self.state.position_sl_tp:
-            self.state.position_sl_tp.pop(asset)
-        return True
+        """Close position - REAL TRADING with exchange order"""
+        try:
+            self.state.push("info", f"🛑 Close position requested for {asset}")
+            # Try to close on exchange if real trading
+            if not self.settings.effective_dry_run and self.settings.trading_enabled:
+                try:
+                    import httpx
+                    base = self.settings.ariax_base_url
+                    headers = {"X-API-Key": self.settings.ariax_api_key, "X-API-Secret": self.settings.ariax_api_secret}
+                    # Get positions to find size
+                    r = httpx.get(f"{base}/api/positions", headers=headers, timeout=10)
+                    data = r.json()
+                    positions = data.get("data", []) if isinstance(data, dict) else []
+                    target_pos = None
+                    for pos in positions:
+                        sym = pos.get("symbol", "")
+                        if asset.upper() in sym.upper():
+                            target_pos = pos
+                            break
+                    if target_pos:
+                        size = float(target_pos.get("size", 0))
+                        if abs(size) > 1e-8:
+                            side = "sell" if size > 0 else "buy"
+                            symbol = target_pos.get("symbol")
+                            body = {"symbol": symbol, "side": side, "qty": abs(size), "type": "market"}
+                            r2 = httpx.post(f"{base}/api/order", headers=headers, json=body, timeout=10)
+                            self.state.push("info", f"✅ Close order {asset} {side} {abs(size)} resp={r2.text[:200]}")
+                        else:
+                            self.state.push("info", f"No position size for {asset}")
+                    else:
+                        self.state.push("info", f"No position found for {asset} on exchange")
+                except Exception as e:
+                    self.state.push("error", f"Close exchange failed {asset}: {e}")
+            
+            # Clean local state
+            if asset in self.positions_state:
+                self.positions_state.pop(asset)
+            if asset in self.state.position_sl_tp:
+                self.state.position_sl_tp.pop(asset)
+            
+            self.state.push("info", f"✅ Position {asset} closed (local state cleared)")
+            return True
+        except Exception as e:
+            self.state.push("error", f"Close failed {asset}: {e}")
+            return False
 
     def auto_register_smart(self, asset: str, entry: float, side: int, atr: float):
         """v018 compat - Auto-register SMART TP/SL"""
