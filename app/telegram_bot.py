@@ -233,7 +233,7 @@ class TelegramReporter:
             from app.trade_reporter import format_single_trade
             text = format_single_trade(action, version)
             self.stats["trades_alerted"] += 1
-            ok = self.send(text, reply_markup=self._kb(self._engine.state.positions if self._engine else []), parse_mode=None)
+            ok = self.send(text, reply_markup=None, parse_mode=None)
             if not ok:
                 try:
                     simple_text = f"TRADE {action.get('asset','?')} {action.get('direction','?')} {action.get('filled_amount') or action.get('amount',0)} @ {action.get('price',0)}"
