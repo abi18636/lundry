@@ -288,6 +288,7 @@ class TradingEngine:
             tasks = []
             for asset in active_assets:
                 symbol = settings.instrument_for(asset)
+                order_sym = settings.order_symbol_for(asset) if hasattr(settings, 'order_symbol_for') else symbol
                 tasks.append(client.order_book(symbol))
                 tasks.append(client.candles(symbol, hours=100))
 
@@ -321,6 +322,7 @@ class TradingEngine:
             # 3. Process each asset with v019 logic
             for asset in active_assets:
                 symbol = settings.instrument_for(asset)
+                order_sym = settings.order_symbol_for(asset) if hasattr(settings, 'order_symbol_for') else symbol
                 book = market_data[asset]["book"]
                 df = market_data[asset]["candles"]
 
@@ -352,7 +354,7 @@ class TradingEngine:
                         close_side = "sell" if current_qty > 0 else "buy"
                         try:
                             price = maker_limit_price(book, close_side)
-                            await client.place_order(symbol, close_side, abs(current_qty), price, post_only=False, reduce_only=True)
+                            await client.place_order(order_sym, close_side, abs(current_qty), price, post_only=False, reduce_only=True)
                             self._log_fill({
                                 "asset": asset,
                                 "instrument": symbol,
@@ -375,7 +377,7 @@ class TradingEngine:
                         close_side = "sell" if current_qty > 0 else "buy"
                         try:
                             price = maker_limit_price(book, close_side)
-                            await client.place_order(symbol, close_side, partial_qty, price, post_only=settings.post_only, reduce_only=True)
+                            await client.place_order(order_sym, close_side, partial_qty, price, post_only=settings.post_only, reduce_only=True)
                             self._log_fill({
                                 "asset": asset,
                                 "instrument": symbol,
@@ -442,7 +444,7 @@ class TradingEngine:
                         
                         if not settings.dry_run and settings.trading_enabled:
                             await client.place_order(
-                                symbol=symbol,
+                                symbol=order_sym,
                                 side=plan.direction,
                                 qty=plan.amount,
                                 price=limit_px,
@@ -533,6 +535,7 @@ class TradingEngine:
             
             for asset in active_assets[:2]:  # Only 2 for fallback speed
                 symbol = settings.instrument_for(asset)
+                order_sym = settings.order_symbol_for(asset) if hasattr(settings, 'order_symbol_for') else symbol
                 try:
                     book = client.order_book(symbol)
                     df = client.candles(symbol, hours=100)
@@ -561,7 +564,7 @@ class TradingEngine:
                     if plan.status == "planned" and plan.amount > 0:
                         limit_px = maker_limit_price(book, plan.direction)
                         if not settings.dry_run:
-                            client.place_order(symbol, plan.direction, plan.amount, limit_px, post_only=True, reduce_only=plan.reduce_only)
+                            client.place_order(order_sym, plan.direction, plan.amount, limit_px, post_only=True, reduce_only=plan.reduce_only)
                         self._log_fill({
                             "asset": asset,
                             "instrument": symbol,

@@ -1,5 +1,5 @@
 """
-app/config.py - Zenith Bot v019 STABLE REAL TRADING - FIXED SYMBOL FORMAT
+app/config.py - Zenith Bot v019 REAL TRADING - FIXED SYMBOL DUAL FORMAT
 """
 from __future__ import annotations
 from functools import lru_cache
@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     deribit_base_url: str = Field(default="https://test.deribit.com")
 
     post_only: bool = True
-    loop_seconds: int = 300
-    trade_on_candle_close_only: bool = True
+    loop_seconds: int = 90
+    trade_on_candle_close_only: bool = False  # FIXED: Allow trading every 90s for testing
     
     capital_usd: float = Field(default=400.0, gt=0)
     capital: float = Field(default=2000.0, gt=0)
@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     state_path: str = "state/bot_state.json"
-    version: str = "v019-STABLE-REAL-TRADING-FIXED-SYMBOL"
+    version: str = "v019-STABLE-REAL-TRADING-FIXED-SYMBOL-DUAL"
 
     @property
     def effective_assets(self) -> List[str]:
@@ -76,7 +76,11 @@ class Settings(BaseSettings):
         return self.dry_run
 
     def instrument_for(self, asset: str) -> str:
-        # FIXED: AriaX expects BTC/USDT not BTCUSDT
+        # For market data (v5 API): BTCUSDT
+        return f"{asset.upper()}USDT"
+
+    def order_symbol_for(self, asset: str) -> str:
+        # For order placement (legacy /api/order): BTC/USDT
         return f"{asset.upper()}/USDT"
 
     @property
