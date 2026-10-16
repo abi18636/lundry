@@ -279,6 +279,30 @@ class TradingEngine:
             # Fix 3: Dynamic assets
             active_assets = settings.effective_assets if hasattr(settings, 'effective_assets') else [a.strip() for a in settings.assets.split(",") if a.strip()]
             
+            # FIX: Cancel all open orders if >10 to prevent 69 orders accumulation
+            try:
+                import httpx
+                base = settings.ariax_base_url
+                headers = {"X-API-Key": settings.ariax_api_key, "X-API-Secret": settings.ariax_api_secret}
+                try:
+                    r = httpx.get(f"{base}/api/orders", headers=headers, timeout=5)
+                    orders = r.json().get("data", []) if r.status_code == 200 else []
+                    if len(orders) > 10:
+                        import logging
+                        logging.getLogger("engine").info(f"Found {len(orders)} open orders, canceling all")
+                        for o in orders:
+                            try:
+                                httpx.post(f"{base}/api/cancel", headers=headers, json={"id": o.get("id")}, timeout=5)
+                            except:
+                                pass
+                        self.state.push("info", f"🧹 Canceled {len(orders)} old orders")
+                except Exception as e:
+                    import logging
+                    logging.getLogger("engine").warning(f"Cancel all failed: {e}")
+            except Exception as e:
+                import logging
+                logging.getLogger("engine").warning(f"Order cleanup failed: {e}")
+            
             # 1. Concurrently fetch account and positions
             account_task = client.account_summary("USDT")
             positions_task = client.positions("USDT")
