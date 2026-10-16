@@ -1,6 +1,5 @@
 """
-app/config.py - Zenith Bot v019 STABLE REAL TRADING
-Fixes v019 + REAL KEYS SET
+app/config.py - Zenith Bot v019 STABLE REAL TRADING - FIXED SYMBOL FORMAT
 """
 from __future__ import annotations
 from functools import lru_cache
@@ -14,19 +13,16 @@ ALLOWED_ASSETS_SMALL_CAP = ["BTC", "ETH"]
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # API Security - REAL KEYS SET (should be moved to Render env vars for security)
     ariax_base_url: str = Field(default="https://dryclean-app-1.onrender.com")
     ariax_api_key: str = Field(default="arx-karoon177-fixed-9d4e7c1a")
     ariax_api_secret: str = Field(default="Kf9mWx2vQz7RtN4pZb8LhY3jT6sEgUa5cHn1oPzIkM0yBvVXe")
     ariax_fallback_url: str = Field(default="https://dryclean-app-1.onrender.com")
     deribit_base_url: str = Field(default="https://test.deribit.com")
 
-    # v019 Execution
     post_only: bool = True
     loop_seconds: int = 300
     trade_on_candle_close_only: bool = True
     
-    # Financial
     capital_usd: float = Field(default=400.0, gt=0)
     capital: float = Field(default=2000.0, gt=0)
     lev_cap: float = Field(default=2.0, gt=0, le=3.0)
@@ -44,7 +40,6 @@ class Settings(BaseSettings):
     smart_tp2_atr: float = 4.0
     smart_trailing_atr: float = 1.5
 
-    # REAL TRADING ENABLED
     trading_enabled: bool = True
     dry_run: bool = False
     max_drawdown_pct: float = 0.15
@@ -58,7 +53,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     state_path: str = "state/bot_state.json"
-    version: str = "v019-STABLE-REAL-TRADING"
+    version: str = "v019-STABLE-REAL-TRADING-FIXED-SYMBOL"
 
     @property
     def effective_assets(self) -> List[str]:
@@ -76,13 +71,13 @@ class Settings(BaseSettings):
 
     @property
     def effective_dry_run(self) -> bool:
-        # Real trading because keys exist and dry_run=False
         if not self.ariax_api_key or not self.ariax_api_secret:
             return True
         return self.dry_run
 
     def instrument_for(self, asset: str) -> str:
-        return f"{asset.upper()}USDT"
+        # FIXED: AriaX expects BTC/USDT not BTCUSDT
+        return f"{asset.upper()}/USDT"
 
     @property
     def test_trade_asset(self) -> str:
