@@ -449,8 +449,12 @@ class AriaXAsyncClient:
                 if resp.status_code >= 400:
                     raise AriaXAPIError(path, resp.status_code, f"HTTP {resp.status_code}")
                 data = resp.json()
+                # Check Bybit-style retCode
                 if isinstance(data, dict) and data.get("retCode", 0) != 0:
                     raise AriaXAPIError(path, data.get("retCode"), data.get("retMsg", "Unknown Error"))
+                # Check legacy ok field - CRITICAL FIX for insufficient balance etc
+                if isinstance(data, dict) and "ok" in data and not data.get("ok"):
+                    raise AriaXAPIError(path, data.get("error") or -1, str(data.get("error") or data))
                 return data
             except Exception as exc:
                 last_exc = exc

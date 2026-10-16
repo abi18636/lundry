@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     rebalance_threshold_usd: float = 15.0
     min_notional_usd: float = 5.0
     effective_capital: float = Field(default=2000.0)
-    assets: str = "BTC,ETH,SOL,AVAX,LINK,XRP,DOGE,ADA,DOT,LTC"
+    assets: str = "BTC,ETH"
     smart_tp_sl_enabled: bool = True
     smart_sl_atr: float = 2.0
     smart_be_trigger_atr: float = 1.5
@@ -43,11 +43,9 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     state_path: str = "state/bot_state.json"
-    version: str = "v019-STABLE-REAL-FIXED"
+    version: str = "v019-REAL-FIXED-BTCUSD"
     @property
     def effective_assets(self) -> List[str]:
-        if self.capital_usd < 1000.0:
-            return ALLOWED_ASSETS_SMALL_CAP.copy()
         return [a.strip() for a in self.assets.split(",") if a.strip() in ALLOWED_ASSETS_FULL]
     @property
     def asset_list(self) -> List[str]:
@@ -61,9 +59,12 @@ class Settings(BaseSettings):
             return True
         return self.dry_run
     def instrument_for(self, asset: str) -> str:
+        # For market data: BTCUSDT (v5)
         return f"{asset.upper()}USDT"
     def order_symbol_for(self, asset: str) -> str:
-        return f"{asset.upper()}/USDT"
+        # For real trading: BTCUSD allows both buy and sell (futures)
+        # BTC/USDT only allows buy in spot
+        return f"{asset.upper()}USD"
     @property
     def test_trade_asset(self) -> str:
         return "BTC"
