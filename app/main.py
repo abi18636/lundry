@@ -183,25 +183,6 @@ def api_status(authorization: Optional[str] = Header(None), x_token: Optional[st
         }
     }
 
-@app.get("/api/debug/test_trade")
-def debug_test_trade(action: str = "start", authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
-    _check_token(authorization, x_token)
-    try:
-        if not hasattr(engine, 'test_trader') or not engine.test_trader:
-            return {"ok": False, "error": "test_trader not available"}
-        if action == "start":
-            state = engine.test_trader.start()
-        elif action == "close":
-            state = engine.test_trader.request_close()
-        elif action == "status":
-            state = engine.test_trader.snapshot()
-        else:
-            state = engine.test_trader.snapshot()
-        return {"ok": True, "action": action, "state": state, "effective_test_trade": engine.settings.effective_test_trade_enabled, "effective_dry_run": engine.settings.effective_dry_run, "build": BUILD}
-    except Exception as e:
-        import traceback
-        return {"ok": False, "error": str(e), "tb": traceback.format_exc()[:1000]}
-
 @app.get("/api/debug/flush")
 def debug_flush(authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token)

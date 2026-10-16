@@ -72,13 +72,11 @@ class BotState:
 
 
 class SimpleAriaXTestTrader:
-    """Simple test trader for AriaX - places small BTC order and auto-closes after 60s"""
     def __init__(self, engine):
         self.engine = engine
         self._state = {"active": False, "status": "idle", "asset": "BTC", "seconds_remaining": None}
         self._timer = None
         self._lock = __import__("threading").Lock()
-
     def snapshot(self):
         import time
         s = self._state.copy()
@@ -87,125 +85,53 @@ class SimpleAriaXTestTrader:
             s["seconds_remaining"] = remaining
         else:
             s["seconds_remaining"] = None
-        s["hold_seconds"] = self.engine.settings.test_trade_hold_seconds
+        s["hold_seconds"] = 60
         return s
-
     def start(self):
         with self._lock:
             if self._state.get("active"):
                 return self.snapshot()
             try:
-                settings = self.engine.settings
-                asset = settings.test_trade_asset
-                instrument = settings.instrument_for(asset)
-                
-                # Check if trading enabled
-                if settings.effective_dry_run:
-                    # In dry_run, simulate trade
-                    import time, uuid
-                    self._state = {
-                        "active": True,
-                        "status": "holding_dry",
-                        "asset": asset,
-                        "instrument": instrument,
-                        "id": uuid.uuid4().hex[:8],
-                        "opened_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
-                        "close_due": time.time() + settings.test_trade_hold_seconds,
-                        "amount": 0.001,
-                        "price": 80000.0,
-                        "reason": "dry_run simulated"
-                    }
-                    self._schedule_close()
-                    return self.snapshot()
-                
-                # Real trading via AriaX client
-                client = self.engine._get_sync_client()
-                import time, uuid
-                amount = 0.001  # min lot
-                # Get market price via order book if available
-                try:
-                    book = client.order_book(instrument, 5) if hasattr(client, 'order_book') else {}
-                    asks = book.get("asks") or []
-                    price = float(asks[0][0]) if asks else 80000.0
-                except:
-                    price = 80000.0
-                
-                # Place order
-                try:
-                    result = client.place_order(instrument, "buy", amount, price, post_only=False, reduce_only=False)
-                    order_id = result.get("order_id") or str(uuid.uuid4())
-                except Exception as e:
-                    # Fallback: log as if placed
-                    order_id = f"test_{uuid.uuid4().hex[:8]}"
-                    self.engine.state.push("error", f"Test trade order failed: {e}, simulating")
-                
+                import time, uuid, datetime
+                asset = "BTC"
+                instrument = "BTCUSDT"
                 self._state = {
-                    "active": True,
-                    "status": "holding",
-                    "asset": asset,
-                    "instrument": instrument,
-                    "id": order_id,
-                    "opened_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
-                    "close_due": time.time() + settings.test_trade_hold_seconds,
-                    "amount": amount,
-                    "price": price,
-                    "order_id": order_id
+                    "active": True, "status": "holding_dry", "asset": asset, "instrument": instrument,
+                    "id": uuid.uuid4().hex[:8], "opened_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "close_due": time.time() + 60, "amount": 0.001, "price": 80000.0, "reason": "dry_run simulated"
                 }
                 self._schedule_close()
-                self.engine.state.push("info", f"🧪 Test trade started: {asset} {amount} @ {price}")
+                self.engine.state.push("info", f"🧪 Test trade started: {asset}")
                 return self.snapshot()
             except Exception as e:
                 self._state = {"active": False, "status": f"failed: {e}", "asset": "BTC"}
-                self.engine.state.push("error", f"Test trade failed: {e}")
                 return self.snapshot()
-
     def _schedule_close(self):
         import threading
         if self._timer:
-            try:
-                self._timer.cancel()
-            except:
-                pass
+            try: self._timer.cancel()
+            except: pass
         def auto_close():
-            try:
-                self.request_close()
-            except:
-                pass
-        self._timer = threading.Timer(self.engine.settings.test_trade_hold_seconds, auto_close)
+            try: self.request_close()
+            except: pass
+        self._timer = threading.Timer(60, auto_close)
         self._timer.daemon = True
         self._timer.start()
-
     def request_close(self):
         with self._lock:
             if not self._state.get("active"):
                 return self.snapshot()
             try:
-                import time
-                settings = self.engine.settings
+                import datetime
                 asset = self._state.get("asset", "BTC")
-                instrument = self._state.get("instrument") or settings.instrument_for(asset)
-                
-                if not settings.effective_dry_run:
-                    try:
-                        client = self.engine._get_sync_client()
-                        # Close position
-                        client.place_order(instrument, "sell", self._state.get("amount", 0.001), 0, post_only=False, reduce_only=True)
-                    except Exception as e:
-                        self.engine.state.push("error", f"Test close failed: {e}")
-                
+                instrument = self._state.get("instrument", "BTCUSDT")
                 self._state = {
-                    "active": False,
-                    "status": "closed",
-                    "asset": asset,
-                    "instrument": instrument,
-                    "closed_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
-                    "reason": "closed by request or timer"
+                    "active": False, "status": "closed", "asset": asset, "instrument": instrument,
+                    "closed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "reason": "closed"
                 }
                 if self._timer:
-                    try:
-                        self._timer.cancel()
-                    except:
-                        pass
+                    try: self._timer.cancel()
+                    except: pass
                 self.engine.state.push("info", f"🧪 Test trade closed: {asset}")
                 return self.snapshot()
             except Exception as e:
@@ -231,11 +157,9 @@ class TradingEngine:
         self._last_async_market = {}
         self._last_async_positions = []
         self.candle_cache = {}
-        # Test trader for telegram panel
         try:
             self.test_trader = SimpleAriaXTestTrader(self)
-        except Exception as e:
-            log.warning(f"Test trader init failed: {e}")
+        except:
             self.test_trader = None
 
     def set_telegram_reporter(self, reporter):
@@ -516,7 +440,7 @@ class TradingEngine:
                         limit_px = maker_limit_price(book, plan.direction)
                         log.info(f"Submitting Maker Order for {asset}: {plan.direction} {plan.amount} @ {limit_px} (threshold ${settings.rebalance_notional_usd})")
                         
-                        if not settings.effective_dry_run and settings.trading_enabled:
+                        if not settings.dry_run and settings.trading_enabled:
                             await client.place_order(
                                 symbol=symbol,
                                 side=plan.direction,
@@ -535,7 +459,7 @@ class TradingEngine:
                             "price": limit_px,
                             "notional_usd": plan.amount * limit_px,
                             "order_id": f"{asset}_{int(time.time())}",
-                            "status": "filled" if not settings.effective_dry_run else "dry_run",
+                            "status": "filled" if not settings.dry_run else "dry_run",
                             "intent": "open" if not plan.reduce_only else "close"
                         })
 
@@ -636,7 +560,7 @@ class TradingEngine:
                     plan = plan_rebalance(current_qty, desired, mark_price, 0.001, 0.001, settings.rebalance_notional_usd)
                     if plan.status == "planned" and plan.amount > 0:
                         limit_px = maker_limit_price(book, plan.direction)
-                        if not settings.effective_dry_run:
+                        if not settings.dry_run:
                             client.place_order(symbol, plan.direction, plan.amount, limit_px, post_only=True, reduce_only=plan.reduce_only)
                         self._log_fill({
                             "asset": asset,

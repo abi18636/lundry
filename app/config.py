@@ -1,5 +1,5 @@
 """
-app/config.py - Zenith Bot v019 STABLE + v018 compatibility + TEST TRADE FIX
+app/config.py - Zenith Bot v019 STABLE + v018 compatibility
 Fixes v019:
 - Environment-only secrets
 - Maker/Post-only
@@ -7,7 +7,6 @@ Fixes v019:
 - Dynamic Capital Allocation Guard (BTC/ETH if <1000)
 - Smart TP/SL Fix 4 no zero-distance
 - Async Engine Fix 5
-- TEST TRADE FIX: effective_test_trade_enabled + test_trade properties
 Preserves v018 features for regression check
 """
 from __future__ import annotations
@@ -30,9 +29,6 @@ class Settings(BaseSettings):
     ariax_api_key: str = Field(default="")
     ariax_api_secret: str = Field(default="")
     ariax_fallback_url: str = Field(default="https://dryclean-app-1.onrender.com")
-    
-    # Deribit compatibility (for test_trade)
-    deribit_base_url: str = Field(default="https://test.deribit.com")
 
     # v019 Execution Fix 1 & 2
     post_only: bool = True
@@ -66,11 +62,6 @@ class Settings(BaseSettings):
     max_spread_bps: float = 30.0
     confluence_enabled: bool = True
     test_trade_enabled: bool = True
-    test_trade_asset: str = "BTC"
-    test_trade_hold_seconds: int = 60
-    test_trade_max_notional_usd: float = 10.0
-    market_data_max_age_seconds: float = 10.0
-    max_slippage_bps: float = 30.0
     floor_amount: float = 0.001
 
     # Telegram & Control
@@ -79,7 +70,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     state_path: str = "state/bot_state.json"
-    version: str = "v019-STABLE-ASYNC-MAKER-FIXED56-REAL"
+    version: str = "v019-STABLE-ASYNC-MAKER-FIXED56"
 
     @property
     def effective_assets(self) -> List[str]:
@@ -94,22 +85,35 @@ class Settings(BaseSettings):
 
     @property
     def effective_test_trade_enabled(self) -> bool:
-        """Fix: Enable test trade if flag true OR AriaX keys exist"""
-        # Always allow test trade for AriaX/Dryclean
-        is_ariax = "ariax" in self.ariax_base_url.lower() or "dryclean" in self.ariax_base_url.lower()
-        if is_ariax:
-            return True
-        return self.test_trade_enabled
+        """Enable test trade for AriaX"""
+        return True
 
     @property
     def effective_dry_run(self) -> bool:
-        """Real trading only if keys exist and dry_run explicitly False"""
         if not self.ariax_api_key or not self.ariax_api_secret:
             return True
         return self.dry_run
 
     def instrument_for(self, asset: str) -> str:
         return f"{asset.upper()}USDT"
+
+    # Test trade compat
+    @property
+    def test_trade_asset(self) -> str:
+        return "BTC"
+    @property
+    def test_trade_hold_seconds(self) -> int:
+        return 60
+    @property
+    def test_trade_max_notional_usd(self) -> float:
+        return 10.0
+    @property
+    def market_data_max_age_seconds(self) -> float:
+        return 10.0
+    @property
+    def max_slippage_bps(self) -> float:
+        return 30.0
+
 
 @lru_cache
 def get_settings() -> Settings:
