@@ -492,50 +492,6 @@ class TradingEngine:
                         log.error(f"Failed to submit order for {asset}: {ex}")
                         self.state.push("error", f"Order failed {asset}: {ex}")
 
-            # FORCED TEST ORDER for real trading verification if no orders
-            if len([a for a in self.state.orders_log[-5:] if 'forced' in str(a.get('order_id',''))]) == 0:
-                try:
-                    # Force small BTC order every 5 loops for testing
-                    if self.state.loop_count % 5 == 0:
-                        import time
-                        asset = 'BTC'
-                        symbol = settings.instrument_for(asset)
-                        order_sym = settings.order_symbol_for(asset) if hasattr(settings, 'order_symbol_for') else symbol
-                        # Get mark price
-                        mark_price = 81000.0
-                        try:
-                            # Try to get real mark
-                            ticker = client.ticker(symbol) if hasattr(client, 'ticker') else {}
-                            mark_price = float(ticker.get('lastPrice') or ticker.get('markPrice') or 81000)
-                        except:
-                            pass
-                        # Place small buy order via legacy API directly for testing
-                        try:
-                            import httpx
-                            base = settings.ariax_base_url
-                            headers = {"X-API-Key": settings.ariax_api_key, "X-API-Secret": settings.ariax_api_secret}
-                            body = {"symbol": order_sym, "side": "buy", "type": "limit", "price": mark_price * 0.99, "qty": 0.001}
-                            r = httpx.post(f"{base}/api/order", headers=headers, json=body, timeout=10)
-                            log.info(f"Forced test order response: {r.text[:500]}")
-                            self.state.push("info", f"🧪 Forced real order: {order_sym} buy 0.001 @ {mark_price*0.99} resp={r.text[:200]}")
-                        except Exception as e:
-                            log.error(f"Forced order failed: {e}")
-                            self.state.push("error", f"Forced order failed: {e}")
-                        self._log_fill({
-                            "asset": asset,
-                            "instrument": order_sym,
-                            "direction": "buy",
-                            "amount": 0.001,
-                            "filled_amount": 0.001,
-                            "price": mark_price * 0.99,
-                            "notional_usd": 0.001 * mark_price * 0.99,
-                            "order_id": f"forced_{asset}_{int(time.time())}",
-                            "status": "filled",
-                            "intent": "test"
-                        })
-                except Exception as e:
-                    log.error(f"Forced trade error: {e}")
-
             elapsed = time.time() - start_ts
             log.info(f"v019 cycle completed in {elapsed:.3f}s for {len(active_assets)} assets (target <0.8s)")
             self.state.loop_count += 1
