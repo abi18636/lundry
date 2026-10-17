@@ -165,6 +165,50 @@ class TradingEngine:
     def set_telegram_reporter(self, reporter):
         self._telegram_reporter = reporter
 
+    def snapshot(self):
+        """Snapshot for telegram panel and dashboard - v021 modular compatible"""
+        try:
+            import copy
+            from dataclasses import asdict
+            s = self.settings
+            # Try to get state dict
+            try:
+                result = copy.deepcopy(asdict(self.state))
+            except Exception:
+                result = {
+                    "positions": getattr(self.state, 'positions', []),
+                    "position_sl_tp": getattr(self.state, 'position_sl_tp', {}),
+                    "orders_log": getattr(self.state, 'orders_log', []),
+                    "events": getattr(self.state, 'events', []),
+                    "risk": getattr(self.state, 'risk', {}),
+                    "last_fill_at": getattr(self.state, 'last_fill_at', None),
+                    "version": getattr(self.state, 'version', 'v021'),
+                }
+            result["bot"] = f"zenith-SUPER-{getattr(self.state, 'version', 'v021')}"
+            try:
+                result["config"] = {
+                    "capital_usd": getattr(s, 'capital_usd', 400),
+                    "lev_cap": getattr(s, 'lev_cap', 1),
+                    "assets": getattr(s, 'effective_assets', getattr(s, 'asset_list', ['BTC','ETH'])),
+                    "loop_seconds": getattr(s, 'loop_seconds', 90),
+                    "max_drawdown_pct": getattr(s, 'max_drawdown_pct', 0.15),
+                    "version": getattr(self.state, 'version', 'v021'),
+                    "trade_on_candle_close_only": getattr(s, 'trade_on_candle_close_only', True),
+                }
+            except Exception:
+                result["config"] = {"capital_usd": 400, "assets": ["BTC","ETH"]}
+            # Add positions from last async
+            try:
+                if hasattr(self, '_last_async_positions') and self._last_async_positions:
+                    result["positions"] = self._last_async_positions
+            except:
+                pass
+            return result
+        except Exception as e:
+            import logging
+            logging.getLogger("engine").warning(f"snapshot failed: {e}")
+            return {"positions": [], "config": {"capital_usd": 400, "assets": ["BTC","ETH"]}, "bot": "zenith-v021"}
+
     def _get_sync_client(self):
         if self._sync_client is None:
             self._sync_client = AriaXClient(
