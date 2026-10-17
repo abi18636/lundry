@@ -13,13 +13,20 @@ class Settings(BaseSettings):
     ariax_fallback_url: str = Field(default="https://dryclean-app-1.onrender.com")
     deribit_base_url: str = Field(default="https://test.deribit.com")
     post_only: bool = True
-    loop_seconds: int = 90
-    trade_on_candle_close_only: bool = True
+    _loop_seconds: int = 90
+    _trade_on_candle_close_only: bool = True
+    _capital_usd: float = 400.0
+    _capital: float = 400.0
+    _lev_cap: float = 1.0
+    _rebalance_notional_usd: float = 25.0
+    _rebalance_threshold_usd: float = 25.0
+    loop_seconds: int = Field(default=90)
+    trade_on_candle_close_only: bool = Field(default=True)
     capital_usd: float = Field(default=400.0, gt=0)
     capital: float = Field(default=400.0, gt=0)
     lev_cap: float = Field(default=1.0, gt=0, le=3.0)
-    rebalance_notional_usd: float = 25.0
-    rebalance_threshold_usd: float = 25.0
+    rebalance_notional_usd: float = Field(default=25.0)
+    rebalance_threshold_usd: float = Field(default=25.0)
     min_notional_usd: float = 5.0
     effective_capital: float = Field(default=400.0)
     assets: str = "BTC,ETH"
@@ -41,10 +48,23 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     state_path: str = "state/bot_state.json"
-    version: str = "v021-MODULAR-12PHASES-FIXED"
+    version: str = "v021-MODULAR-12PHASES-FIXED-FORCE-BTC-ETH"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Phase11: FORCE values regardless of ENV to fix Render dashboard override
+        object.__setattr__(self, 'capital_usd', 400.0)
+        object.__setattr__(self, 'capital', 400.0)
+        object.__setattr__(self, 'lev_cap', 1.0)
+        object.__setattr__(self, 'rebalance_notional_usd', 25.0)
+        object.__setattr__(self, 'rebalance_threshold_usd', 25.0)
+        object.__setattr__(self, 'loop_seconds', 90)
+        object.__setattr__(self, 'trade_on_candle_close_only', True)
+        object.__setattr__(self, 'assets', "BTC,ETH")
+
     @property
     def effective_assets(self) -> List[str]:
-        return [a.strip() for a in self.assets.split(",") if a.strip() in ALLOWED_ASSETS_FULL]
+        return ["BTC", "ETH"]
     @property
     def asset_list(self) -> List[str]:
         return self.effective_assets
