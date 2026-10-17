@@ -147,7 +147,7 @@ class TradingEngine:
     def __init__(self, settings: Settings = None):
         self.settings = settings or get_settings()
         self.state = BotState(self.settings.state_path)
-        self.positions_state = {}  # For smart TP/SL v019
+        self.positions_state = dict(self.state.position_sl_tp or {})  # Phase6: Restore after restart
         self.last_candle_checked: Dict[str, str] = {}
         self._telegram_reporter = None
         self._reported_order_ids = set()
@@ -339,7 +339,12 @@ class TradingEngine:
                     log.warning(f"Market data parse failed for {asset}: {e}")
                     market_data[asset] = {"book": {"best_bid":0,"best_ask":0,"state":"unknown"}, "candles": pd.DataFrame()}
 
-            pos_map = {p.get("instrument_name") or p.get("symbol"): p for p in positions}
+            pos_map = {}
+            for p in positions:
+                raw_sym = p.get("instrument_name") or p.get("symbol") or ""
+                asset_key = settings.asset_from_symbol(raw_sym) if hasattr(settings, 'asset_from_symbol') else raw_sym.replace("USDT", "").replace("USD", "").replace("/", "")
+                if asset_key:
+                    pos_map[asset_key] = p
             self._last_async_market = market_data
             self._last_async_positions = positions
 
@@ -355,7 +360,7 @@ class TradingEngine:
                     if df.empty:
                         continue
 
-                current_pos = pos_map.get(symbol, {})
+                current_pos = pos_map.get(asset, {})
                 current_qty = float(current_pos.get("size", 0.0))
                 mark_price = book.get("best_bid", 0.0) or book.get("best_ask", 0.0) or 0.0
                 if mark_price <= 0:
@@ -377,8 +382,7 @@ class TradingEngine:
                         log.warning(f"Closing position on {asset} due to {exit_eval['trigger_exit']} @ {mark_price}")
                         close_side = "sell" if current_qty > 0 else "buy"
                         try:
-                            price = maker_limit_price(book, close_side)
-                            await client.place_order(order_sym, close_side, abs(current_qty), price, post_only=False, reduce_only=True)
+                            await client.close_market(order_sym, close_side, abs(current_qty))
                             self._log_fill({
                                 "asset": asset,
                                 "instrument": symbol,
@@ -464,10 +468,12 @@ class TradingEngine:
                 if plan.status == "planned" and plan.amount > 0:
                     try:
                         limit_px = maker_limit_price(book, plan.direction)
-                        log.info(f"Submitting Maker Order for {asset}: {plan.direction} {plan.amount} @ {limit_px} (threshold ${settings.rebalance_notional_usd})")
-                        
-                        if not settings.dry_run and settings.trading_enabled:
-                            await client.place_order(
+                        result = None
+                        order_id = f"{asset}_{int(time.time())}"
+                        status = "dry_run"
+
+                        if not settings.effective_dry_run and settings.trading_enabled:
+                            result = await client.place_order(
                                 symbol=order_sym,
                                 side=plan.direction,
                                 qty=plan.amount,
@@ -475,29 +481,62 @@ class TradingEngine:
                                 post_only=settings.post_only,
                                 reduce_only=plan.reduce_only
                             )
-                        
-                        self._log_fill({
-                            "asset": asset,
-                            "instrument": symbol,
-                            "direction": plan.direction,
-                            "amount": plan.amount,
-                            "filled_amount": plan.amount,
-                            "price": limit_px,
-                            "notional_usd": plan.amount * limit_px,
-                            "order_id": f"{asset}_{int(time.time())}",
-                            "status": "filled" if not settings.dry_run else "dry_run",
-                            "intent": "open" if not plan.reduce_only else "close"
-                        })
 
-                        # Register for Smart TP/SL - Fix 4
-                        if not plan.reduce_only and settings.smart_tp_sl_enabled:
+                            order_id = (
+                                result.get("order_id")
+                                or result.get("id")
+                                or result.get("data", {}).get("id")
+                                or order_id
+                            )
+
+                            status = (
+                                result.get("status")
+                                or result.get("order_state")
+                                or result.get("data", {}).get("status")
+                                or "submitted"
+                            )
+
+                        filled_like = str(status).lower() in (
+                            "filled",
+                            "closed",
+                            "partial",
+                            "partially_filled"
+                        )
+
+                        if filled_like or settings.effective_dry_run:
+                            self._log_fill({
+                                "asset": asset,
+                                "instrument": symbol,
+                                "direction": plan.direction,
+                                "amount": plan.amount,
+                                "filled_amount": plan.amount if filled_like or settings.effective_dry_run else 0,
+                                "price": limit_px,
+                                "notional_usd": plan.amount * limit_px,
+                                "order_id": order_id,
+                                "status": status,
+                                "intent": "open" if not plan.reduce_only else "close"
+                            })
+
+                        else:
+                            self.state.push(
+                                "info",
+                                f"Order submitted: {asset} {plan.direction} {plan.amount} @ {limit_px} status={status} id={order_id}"
+                            )
+
+                        if (
+                            filled_like
+                            and not plan.reduce_only
+                            and settings.smart_tp_sl_enabled
+                        ):
                             atr = mark_price * 0.02
                             try:
-                                # Calculate ATR from df if possible
                                 high = df["high"]
                                 low = df["low"]
                                 close_s = df["close"]
-                                tr = pd.concat([high - low, (high - close_s.shift()).abs(), (low - close_s.shift()).abs()], axis=1).max(axis=1)
+                                tr = pd.concat(
+                                    [high - low, (high - close_s.shift()).abs(), (low - close_s.shift()).abs()],
+                                    axis=1
+                                ).max(axis=1)
                                 atr_calc = tr.rolling(14).mean().iloc[-1]
                                 if not pd.isna(atr_calc) and atr_calc > 0:
                                     atr = float(atr_calc)
@@ -510,8 +549,13 @@ class TradingEngine:
                                 atr=atr,
                                 cfg=settings.model_dump() if hasattr(settings, 'model_dump') else settings.__dict__
                             )
+
                             self.state.position_sl_tp[asset] = self.positions_state[asset]
-                            self.state.push("info", f"SMART TP/SL registered for {asset}: SL={self.positions_state[asset]['sl']:.4f} TP1={self.positions_state[asset]['tp1']:.4f} TP2={self.positions_state[asset]['tp2']:.4f}")
+                            self.state.push(
+                                "info",
+                                f"SMART TP/SL registered for {asset}: SL={self.positions_state[asset]['sl']:.4f} TP1={self.positions_state[asset]['tp1']:.4f}"
+                            )
+
                     except Exception as ex:
                         log.error(f"Failed to submit order for {asset}: {ex}")
                         self.state.push("error", f"Order failed {asset}: {ex}")
@@ -566,7 +610,7 @@ class TradingEngine:
                     if df.empty:
                         continue
                     
-                    current_pos = pos_map.get(symbol, {})
+                    current_pos = pos_map.get(asset, {})
                     current_qty = float(current_pos.get("size", 0))
                     mark_price = book.get("best_bid", 0) or 0
                     

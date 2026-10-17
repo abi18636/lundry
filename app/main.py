@@ -22,9 +22,8 @@ BUILD = __import__("os").getenv("RENDER_GIT_COMMIT", "v019-TELEGRAM-RESTORED-a83
 VERSION = "v019-STABLE-ASYNC-MAKER-FIXED56"
 
 settings = get_settings()
-# v019 REAL TRADING: respect settings.dry_run from config/env
-# No forced dry_run - real trading enabled when keys exist and DRY_RUN=false
-print(f"Settings dry_run={settings.dry_run} effective_dry_run={getattr(settings, 'effective_dry_run', settings.dry_run)} trading_enabled={settings.trading_enabled}")
+# Phase12: Respect dry_run from settings, no forced True
+print(f"Settings dry_run={settings.dry_run} effective={getattr(settings, 'effective_dry_run', settings.dry_run)}")
 # v019 force telegram enabled if tokens exist
 try:
     import os
@@ -52,6 +51,11 @@ try:
     except:
         pass
     engine.set_telegram_reporter(telegram_reporter)
+    if telegram_reporter and getattr(telegram_reporter, "enabled", False):
+        try:
+            telegram_reporter.start_background()
+        except Exception as e:
+            log.warning(f"Telegram background start failed: {e}")
 except Exception as e:
     log.warning(f"Telegram init failed: {e}")
     telegram_reporter = None
@@ -75,13 +79,7 @@ async def trading_loop():
             elapsed = time.time() - start
             log.info(f"Cycle done in {elapsed:.3f}s - next in {settings.loop_seconds}s")
             
-            # Poll telegram commands via thread to avoid blocking
-            if telegram_reporter and getattr(telegram_reporter, 'enabled', False):
-                try:
-                    import asyncio
-                    await asyncio.to_thread(telegram_reporter.poll_commands)
-                except Exception as e:
-                    log.warning(f"Telegram poll failed: {e}")
+            # Phase9: polling via background thread
             
             await asyncio.sleep(settings.loop_seconds)
         except asyncio.CancelledError:
@@ -143,7 +141,9 @@ def health():
         "n_assets": len(settings.effective_assets),
         "assets": settings.effective_assets,
         "assets_count": len(settings.effective_assets),
-        "trading_ready": True,
+        "trading_ready": (bool(settings.ariax_api_key) and bool(settings.ariax_api_secret) and settings.trading_enabled and not settings.effective_dry_run and engine.state.last_loop_at is not None),
+            "dry_run": settings.effective_dry_run,
+            "trading_enabled": settings.trading_enabled,
         "capital_usd": settings.capital_usd,
         "effective_assets": settings.effective_assets,
         "post_only": settings.post_only,
@@ -329,8 +329,8 @@ def api_financial(authorization: Optional[str] = Header(None), x_token: Optional
 @app.get("/api/close/{asset}")
 def api_close_alias(asset: str, authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token)
-    engine.state.push("info", f"Manual close requested for {asset} via /api/close/")
-    return {"ok": True, "asset": asset, "msg": f"Close requested for {asset}"}
+    result = engine.close_position(asset.upper())
+    return {"ok": bool(result), "asset": asset.upper(), "result": result}
 
 @app.post("/api/control/close/{asset}")
 def close_asset(asset: str, authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):

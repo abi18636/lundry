@@ -1,16 +1,10 @@
-"""
-Core Module - Config
-Independent: Only settings, no dependency on other modules
-"""
 from __future__ import annotations
 from functools import lru_cache
 from typing import List
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 ALLOWED_ASSETS_FULL = ["BTC", "ETH", "SOL", "AVAX", "LINK", "XRP", "DOGE", "ADA", "DOT", "LTC"]
 ALLOWED_ASSETS_SMALL_CAP = ["BTC", "ETH"]
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     ariax_base_url: str = Field(default="https://dryclean-app-1.onrender.com")
@@ -20,14 +14,14 @@ class Settings(BaseSettings):
     deribit_base_url: str = Field(default="https://test.deribit.com")
     post_only: bool = True
     loop_seconds: int = 90
-    trade_on_candle_close_only: bool = False
+    trade_on_candle_close_only: bool = True
     capital_usd: float = Field(default=400.0, gt=0)
-    capital: float = Field(default=2000.0, gt=0)
-    lev_cap: float = Field(default=2.0, gt=0, le=3.0)
-    rebalance_notional_usd: float = 15.0
-    rebalance_threshold_usd: float = 15.0
+    capital: float = Field(default=400.0, gt=0)
+    lev_cap: float = Field(default=1.0, gt=0, le=3.0)
+    rebalance_notional_usd: float = 25.0
+    rebalance_threshold_usd: float = 25.0
     min_notional_usd: float = 5.0
-    effective_capital: float = Field(default=2000.0)
+    effective_capital: float = Field(default=400.0)
     assets: str = "BTC,ETH"
     smart_tp_sl_enabled: bool = True
     smart_sl_atr: float = 2.0
@@ -47,7 +41,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     state_path: str = "state/bot_state.json"
-    version: str = "v020-MODULAR-REAL"
+    version: str = "v021-MODULAR-12PHASES-FIXED"
     @property
     def effective_assets(self) -> List[str]:
         return [a.strip() for a in self.assets.split(",") if a.strip() in ALLOWED_ASSETS_FULL]
@@ -66,6 +60,9 @@ class Settings(BaseSettings):
         return f"{asset.upper()}USDT"
     def order_symbol_for(self, asset: str) -> str:
         return f"{asset.upper()}USD"
+    def asset_from_symbol(self, symbol: str) -> str:
+        s = str(symbol or "").upper()
+        return s.replace("USDT", "").replace("USD", "").replace("/", "").replace("-", "")
     @property
     def test_trade_asset(self) -> str:
         return "BTC"
@@ -81,7 +78,6 @@ class Settings(BaseSettings):
     @property
     def max_slippage_bps(self) -> float:
         return 30.0
-
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
