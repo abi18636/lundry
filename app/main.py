@@ -338,3 +338,4 @@ def close_asset(asset: str, authorization: Optional[str] = Header(None), x_token
     # Trigger close via engine state
     engine.state.push("info", f"Manual close requested for {asset}")
     return {"ok": True, "asset": asset, "msg": f"Close requested for {asset}"}
+# Trigger deploy Sat Oct 17 18:42:36 UTC 2026
