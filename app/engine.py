@@ -638,44 +638,29 @@ class TradingEngine:
                 if df.empty or len(df) < 50:
                     continue
 
-                # === v025 DEEP TRANSFORMATION - NEW STRATEGY ===
-                # Use Zenith Apex Rebirth if available, else fallback to old
+                # === v025 DEEP TRANSFORMATION - NEW STRATEGY FORCED ===
                 desired_direction = 0
                 signal_strength = 0
                 signal_reasons = []
                 
-                if NEW_STRATEGY_ENABLED and 'zenith_apex_rebirth_signal' in globals():
-                    try:
-                        # Try to get 4h data if available (use 1h *4 as proxy for now)
-                        # For deep transformation, use 1h as both 1h and 4h proxy
-                        signal = zenith_apex_rebirth_signal(df, df)
-                        desired_direction = signal.get("direction", 0)
-                        signal_strength = signal.get("strength", 0)
-                        signal_reasons = signal.get("reasons", [])
-                        
-                        # Log signal for debugging
-                        if desired_direction != 0:
-                            log.info(f"v025 Signal {asset} dir {desired_direction} strength {signal_strength:.2f} reasons {signal_reasons} ADX {signal.get('adx',0):.1f} RSI {signal.get('rsi',0):.1f}")
-                        else:
-                            log.info(f"v025 No signal {asset} reasons {signal_reasons}")
-                            self.state.push("info", f"🔍 No signal {asset}: {', '.join(signal_reasons[:2])}")
-                    except Exception as e:
-                        log.warning(f"v025 signal failed {asset}: {e}, fallback to EMA")
-                        try:
-                            close = df["close"]
-                            ema20 = close.ewm(span=20).mean().iloc[-1]
-                            ema50 = close.ewm(span=50).mean().iloc[-1]
-                            desired_direction = 1 if ema20 > ema50 else (-1 if ema20 < ema50 else 0)
-                        except:
-                            desired_direction = 0
-                else:
-                    try:
-                        close = df["close"]
-                        ema20 = close.ewm(span=20).mean().iloc[-1]
-                        ema50 = close.ewm(span=50).mean().iloc[-1]
-                        desired_direction = 1 if ema20 > ema50 else (-1 if ema20 < ema50 else 0)
-                    except:
-                        desired_direction = 0
+                try:
+                    # Force use of new strategy
+                    signal = zenith_apex_rebirth_signal(df, df)
+                    desired_direction = signal.get("direction", 0)
+                    signal_strength = signal.get("strength", 0)
+                    signal_reasons = signal.get("reasons", [])
+                    
+                    if desired_direction != 0:
+                        log.info(f"v025 Signal {asset} dir {desired_direction} strength {signal_strength:.2f} ADX {signal.get('adx',0):.1f} RSI {signal.get('rsi',0):.1f} BB {signal.get('bb_pos',0):.2f} reasons {signal_reasons}")
+                        self.state.push("info", f"✅ v025 Signal {asset} {desired_direction} strength {signal_strength:.2f} {', '.join(signal_reasons[:1])}")
+                    else:
+                        log.info(f"v025 No signal {asset} reasons {signal_reasons}")
+                        self.state.push("info", f"🔍 No signal {asset}: {', '.join(signal_reasons[:2])}")
+                        continue
+                except Exception as e:
+                    log.warning(f"v025 signal failed {asset}: {e}")
+                    self.state.push("warning", f"⚠️ v025 signal failed {asset}: {e}")
+                    continue
                 
                 if desired_direction == 0:
                     continue
