@@ -37,7 +37,7 @@ FUNDING_FILTER_ENABLED = False  # Placeholder for future
 DRAWDOWN_PROTECTION_ENABLED = True
 PROFIT_SAVER_ENABLED = True
 CONFLUENCE_ENABLED = True
-MIN_CONFLUENCE_SCORE = 2  # Require at least 2 signals
+MIN_CONFLUENCE_SCORE = 1  # Require at least 2 signals
 
 # Risk management: With 10 assets * 10% = 100% capital max, but with lev5 = 500% notional max
 # But with 1% risk per trade, max loss 10% if all 10 SL hit simultaneously (within 15% DD limit)
