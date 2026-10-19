@@ -709,6 +709,31 @@ class TradingEngine:
                     except:
                         pass
 
+                # === v025 COOLDOWN (4h per asset after close) ===
+                try:
+                    last_trade = self.state.last_trade_at.get(asset, 0)
+                    if last_trade and (time.time() - last_trade) < (COOLDOWN_HOURS * 3600):
+                        # Check if we recently closed this asset
+                        # Only allow if no position and cooldown not expired
+                        if abs(current_qty) < 1e-9:
+                            remaining = (COOLDOWN_HOURS * 3600) - (time.time() - last_trade)
+                            if remaining > 0:
+                                log.info(f"Cooldown {asset} {remaining/3600:.1f}h remaining")
+                                continue
+                except:
+                    pass
+
+                # === v025 DAILY LOSS LIMIT (5% = 20$) ===
+                try:
+                    daily_pnl = float(self.state.risk.get("daily_pnl", 0))
+                    if daily_pnl < - (settings.capital_usd * DAILY_LOSS_LIMIT_PCT):
+                        log.warning(f"Daily loss limit hit {daily_pnl} < -{settings.capital_usd*DAILY_LOSS_LIMIT_PCT} - stopping")
+                        self.state.push("warning", f"🛡️ Daily loss limit {daily_pnl:.2f} - trading paused for today")
+                        break
+                except:
+                    pass
+
+
 
                 # Sizing - v025 DEEP TRANSFORMATION - 0.5% risk, 10% notional, lev5
                 # Old loss-making: 50% capital per asset -> 40% loss
