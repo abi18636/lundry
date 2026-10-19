@@ -547,7 +547,38 @@ class TradingEngine:
             self._last_async_market = market_data
             self._last_async_positions = positions
 
-            # 3. Process each asset with v019 logic
+            # === v026 UPGRADED SLEEVES - 7 SUCCESSFUL STRATEGIES ===
+            frames = {}
+            for asset in active_assets:
+                md = market_data.get(asset)
+                if md and md.get("candles") is not None:
+                    try:
+                        df_c = md["candles"]
+                        if not df_c.empty and "close" in df_c.columns:
+                            frames[asset] = df_c
+                    except:
+                        pass
+            
+            sleeve_results = {}
+            blended_targets = {}
+            if 'SLEEVES_AVAILABLE' in globals() and SLEEVES_AVAILABLE and frames:
+                try:
+                    enabled = ["diversified_5", "zenith_apex", "almasi_primary", "inst_v3_stable", "inst_v3_primary", "zenith_endurance", "mean_reversion"]
+                    sleeve_results = build_all_sleeves(frames, settings.capital_usd, min(settings.lev_cap, LEVERAGE_FORCED), enabled=enabled)
+                    blended_targets = blend_sleeves(sleeve_results, DEFAULT_WEIGHTS)
+                    log.info(f"v026 Sleeves: {len(sleeve_results)} built, blended {len(blended_targets)} assets")
+                    # Log each sleeve
+                    for sid, sr in sleeve_results.items():
+                        active_s = sum(1 for pa in sr.per_asset.values() if pa.get("side",0)!=0)
+                        if active_s>0:
+                            self.state.push("info", f"🧩 {sid}: {active_s} signals - {sr.notes[:100]}")
+                except Exception as e:
+                    log.warning(f"v026 Sleeves failed: {e}")
+                    import traceback
+                    log.warning(traceback.format_exc()[:500])
+
+            # 3. Process each asset with v026 logic (sleeves + apex rebirth)
+
             for asset in active_assets:
                 symbol = settings.instrument_for(asset)
                 order_sym = settings.order_symbol_for(asset) if hasattr(settings, 'order_symbol_for') else symbol
@@ -638,29 +669,55 @@ class TradingEngine:
                 if df.empty or len(df) < 50:
                     continue
 
-                # === v025 DEEP TRANSFORMATION - NEW STRATEGY FORCED ===
+                # === v026 UPGRADED - SLEEVES BLEND + APEX REBIRTH ===
                 desired_direction = 0
                 signal_strength = 0
                 signal_reasons = []
+                sleeve_target = 0.0
                 
-                try:
-                    # Force use of new strategy
-                    signal = zenith_apex_rebirth_signal(df, df)
-                    desired_direction = signal.get("direction", 0)
-                    signal_strength = signal.get("strength", 0)
-                    signal_reasons = signal.get("reasons", [])
-                    
-                    if desired_direction != 0:
-                        log.info(f"v025 Signal {asset} dir {desired_direction} strength {signal_strength:.2f} ADX {signal.get('adx',0):.1f} RSI {signal.get('rsi',0):.1f} BB {signal.get('bb_pos',0):.2f} reasons {signal_reasons}")
-                        self.state.push("info", f"✅ v025 Signal {asset} {desired_direction} strength {signal_strength:.2f} {', '.join(signal_reasons[:1])}")
+                # First check blended sleeves target
+                if blended_targets and asset in blended_targets:
+                    sleeve_target = blended_targets.get(asset, 0)
+                    if abs(sleeve_target) > 1e-9:
+                        desired_direction = 1 if sleeve_target > 0 else -1
+                        signal_strength = min(1.0, abs(sleeve_target) / (settings.capital_usd * 0.1 / mark_price) if mark_price>0 else 0)
+                        signal_reasons = [f"Sleeves blend target {sleeve_target:.4f}"]
+                        log.info(f"v026 Sleeves signal {asset} dir {desired_direction} target {sleeve_target:.4f} strength {signal_strength:.2f}")
+                        self.state.push("info", f"✅ v026 Sleeves {asset} {desired_direction} target {sleeve_target:.4f}")
                     else:
-                        log.info(f"v025 No signal {asset} reasons {signal_reasons}")
-                        self.state.push("info", f"🔍 No signal {asset}: {', '.join(signal_reasons[:2])}")
+                        # No sleeve signal, try Apex Rebirth
+                        try:
+                            signal = zenith_apex_rebirth_signal(df, df)
+                            desired_direction = signal.get("direction", 0)
+                            signal_strength = signal.get("strength", 0)
+                            signal_reasons = signal.get("reasons", [])
+                            if desired_direction != 0:
+                                log.info(f"v025 Signal {asset} dir {desired_direction} strength {signal_strength:.2f} ADX {signal.get('adx',0):.1f} RSI {signal.get('rsi',0):.1f}")
+                                self.state.push("info", f"✅ v025 Signal {asset} {desired_direction} strength {signal_strength:.2f}")
+                            else:
+                                log.info(f"v025 No signal {asset} reasons {signal_reasons}")
+                                self.state.push("info", f"🔍 No signal {asset}: {', '.join(signal_reasons[:2])}")
+                                continue
+                        except Exception as ex:
+                            log.warning(f"v025 signal failed {asset}: {ex}")
+                            continue
+                else:
+                    # No sleeves, use Apex Rebirth directly
+                    try:
+                        signal = zenith_apex_rebirth_signal(df, df)
+                        desired_direction = signal.get("direction", 0)
+                        signal_strength = signal.get("strength", 0)
+                        signal_reasons = signal.get("reasons", [])
+                        if desired_direction != 0:
+                            log.info(f"v025 Signal {asset} dir {desired_direction} strength {signal_strength:.2f}")
+                            self.state.push("info", f"✅ v025 Signal {asset} {desired_direction} strength {signal_strength:.2f}")
+                        else:
+                            log.info(f"v025 No signal {asset} reasons {signal_reasons}")
+                            self.state.push("info", f"🔍 No signal {asset}: {', '.join(signal_reasons[:2])}")
+                            continue
+                    except Exception as ex:
+                        log.warning(f"v025 signal failed {asset}: {ex}")
                         continue
-                except Exception as ex:
-                    log.warning(f"v025 signal failed {asset}: {ex}")
-                    self.state.push("warning", f"⚠️ v025 signal failed {asset}: {ex}")
-                    continue
                 
                 if desired_direction == 0:
                     continue
