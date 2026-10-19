@@ -101,14 +101,17 @@ def zenith_apex_rebirth_signal(df_1h: pd.DataFrame, df_4h: pd.DataFrame = None) 
     result = {"direction": 0, "strength": 0, "reasons": [], "adx": 0, "rsi": 50, "bb_pos": 0.5}
     
     try:
-        if df_1h.empty or len(df_1h) < 200:
-            result["reasons"].append("Not enough 1h data")
+        if df_1h.empty or len(df_1h) < 50:
+            result["reasons"].append(f"Not enough 1h data {len(df_1h)}<50")
             return result
         
         close_1h = df_1h["close"].astype(float)
         ema20 = close_1h.ewm(span=20).mean().iloc[-1]
         ema50 = close_1h.ewm(span=50).mean().iloc[-1]
-        ema200 = close_1h.ewm(span=200).mean().iloc[-1]
+        try:
+            ema200 = close_1h.ewm(span=200).mean().iloc[-1]
+        except:
+            ema200 = close_1h.ewm(span=50).mean().iloc[-1]
         
         # 4h trend if available, else use 1h 50/200
         if df_4h is not None and not df_4h.empty and len(df_4h) >= 50:
