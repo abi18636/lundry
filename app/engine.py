@@ -710,35 +710,63 @@ class TradingEngine:
                         pass
 
 
-                # Sizing - Fix 3 + v023 RISK MANAGED
-                # Old: 50% capital per asset -> 40% loss
-                # New: Max 20% capital, 1% risk per trade, lev 2
+                # Sizing - v025 DEEP TRANSFORMATION - 0.5% risk, 10% notional, lev5
+                # Old loss-making: 50% capital per asset -> 40% loss
+                # New: 0.5% risk per trade = 2$ max loss, 10% notional per asset for 10 assets
                 allocated_usd = (settings.capital_usd / len(active_assets)) * min(settings.lev_cap, LEVERAGE_FORCED)
                 allocated_usd = min(allocated_usd, settings.capital_usd * MAX_NOTIONAL_PER_ASSET_PCT)
                 
-                # Risk-managed qty based on 1% risk
-                temp_atr = mark_price * 0.02
+                # Calculate ATR for SL
+                temp_atr = mark_price * 0.015  # Tighter 1.5% fallback
                 try:
                     if not df.empty and len(df) >= 14:
                         high = df["high"].astype(float)
                         low = df["low"].astype(float)
                         tr = (high - low).abs()
-                        temp_atr = float(tr.rolling(14).mean().iloc[-1] or mark_price*0.02)
+                        temp_atr = float(tr.rolling(14).mean().iloc[-1] or mark_price*0.015)
                 except:
                     pass
-                sl_price_temp = mark_price - (1.2 * temp_atr * desired_direction)
-                desired_qty = _calculate_position_size_risk_managed(
-                    entry=mark_price,
-                    sl=sl_price_temp,
-                    capital=settings.capital_usd,
-                    max_risk_pct=MAX_RISK_PER_TRADE_PCT,
-                    max_notional_pct=MAX_NOTIONAL_PER_ASSET_PCT
-                ) * desired_direction
                 
-                # Cap by allocated
+                # SL based on 1.2 ATR (tighter) for 0.5% risk
+                sl_price_temp = mark_price - (settings.smart_sl_atr * temp_atr * desired_direction)
+                
+                # v025 Risk-managed qty with 0.5% risk
+                try:
+                    if NEW_STRATEGY_ENABLED:
+                        qty_risk, notional_risk = calculate_position_size_v025(
+                            entry=mark_price,
+                            sl=sl_price_temp,
+                            capital=settings.capital_usd,
+                            risk_pct=MAX_RISK_PER_TRADE_PCT,
+                            max_notional_pct=MAX_NOTIONAL_PER_ASSET_PCT,
+                            leverage=LEVERAGE_FORCED
+                        )
+                        desired_qty = qty_risk * desired_direction
+                    else:
+                        desired_qty = _calculate_position_size_risk_managed(
+                            entry=mark_price,
+                            sl=sl_price_temp,
+                            capital=settings.capital_usd,
+                            max_risk_pct=MAX_RISK_PER_TRADE_PCT,
+                            max_notional_pct=MAX_NOTIONAL_PER_ASSET_PCT
+                        ) * desired_direction
+                except:
+                    desired_qty = _calculate_position_size_risk_managed(
+                        entry=mark_price,
+                        sl=sl_price_temp,
+                        capital=settings.capital_usd,
+                        max_risk_pct=MAX_RISK_PER_TRADE_PCT,
+                        max_notional_pct=MAX_NOTIONAL_PER_ASSET_PCT
+                    ) * desired_direction
+                
+                # Cap by allocated and ensure min 10$ notional
                 max_qty_alloc = allocated_usd / mark_price if mark_price>0 else 0
                 if abs(desired_qty) > max_qty_alloc and max_qty_alloc>0:
                     desired_qty = max_qty_alloc * (1 if desired_qty>0 else -1)
+                
+                # Ensure at least 10$ notional for 10 assets (avoid dust)
+                if abs(desired_qty * mark_price) < 10.0 and mark_price>0:
+                    desired_qty = (10.0 / mark_price) * desired_direction
 
                 # Execute Maker Rebalance - Fix 1 & 2
                 plan = plan_rebalance(
