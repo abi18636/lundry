@@ -25,11 +25,23 @@ from app.ariax import AriaXAsyncClient, AriaXClient
 from app.execution import maker_limit_price, plan_rebalance
 from app.smart_tp_sl import calculate_initial_levels, evaluate_smart_exit
 
-# === v023 RISK MANAGEMENT FIXES (Team 10x Analysis) ===
-MAX_RISK_PER_TRADE_PCT = 0.01
-MAX_NOTIONAL_PER_ASSET_PCT = 0.20
-LEVERAGE_FORCED = 5
+# === v024 COMPREHENSIVE FIX - 10 ASSETS LEV5 - Fix overall loss-making ===
+# Team 10x Analysis + User request: 10 assets, lev5, fix all loss-making issues
+MAX_RISK_PER_TRADE_PCT = 0.01  # 1% capital = 4$ max loss per trade - prevents 40% loss
+MAX_NOTIONAL_PER_ASSET_PCT = 0.10  # 10% capital per asset for 10 assets = 40$ max per asset (diversification)
+LEVERAGE_FORCED = 5  # User requested lev5
 TREND_FILTER_ENABLED = True
+CORRELATION_FILTER_ENABLED = True
+RSI_FILTER_ENABLED = True
+FUNDING_FILTER_ENABLED = False  # Placeholder for future
+DRAWDOWN_PROTECTION_ENABLED = True
+PROFIT_SAVER_ENABLED = True
+CONFLUENCE_ENABLED = True
+MIN_CONFLUENCE_SCORE = 2  # Require at least 2 signals
+
+# Risk management: With 10 assets * 10% = 100% capital max, but with lev5 = 500% notional max
+# But with 1% risk per trade, max loss 10% if all 10 SL hit simultaneously (within 15% DD limit)
+
 
 
 log = logging.getLogger("engine_v019")
@@ -148,6 +160,7 @@ class SimpleAriaXTestTrader:
 
 
 def _check_trend_filter(df, asset: str) -> int:
+    """Trend filter with EMA 50/200 + EMA20 momentum - prevents counter-trend trades"""
     try:
         if df.empty or len(df) < 200:
             return 0
@@ -163,6 +176,70 @@ def _check_trend_filter(df, asset: str) -> int:
             return 0
     except:
         return 0
+
+def _check_rsi_filter(df, desired_direction: int) -> bool:
+    """RSI filter: Don't buy if RSI>70 (overbought), don't sell if RSI<30 (oversold)"""
+    try:
+        if df.empty or len(df) < 14:
+            return True
+        close = df["close"].astype(float)
+        # Simple RSI 14
+        delta = close.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        rsi_last = float(rsi.iloc[-1])
+        if desired_direction == 1 and rsi_last > 70:
+            return False  # Overbought, don't buy
+        if desired_direction == -1 and rsi_last < 30:
+            return False  # Oversold, don't sell
+        return True
+    except:
+        return True
+
+def _check_confluence(df, desired_direction: int) -> int:
+    """Confluence score: Require multiple signals for higher win rate"""
+    try:
+        score = 0
+        if df.empty or len(df) < 50:
+            return 0
+        close = df["close"].astype(float)
+        ema20 = close.ewm(span=20).mean().iloc[-1]
+        ema50 = close.ewm(span=50).mean().iloc[-1]
+        ema200 = close.ewm(span=200).mean().iloc[-1] if len(df)>=200 else ema50
+        
+        # Signal 1: EMA20 vs EMA50
+        if (desired_direction==1 and ema20>ema50) or (desired_direction==-1 and ema20<ema50):
+            score += 1
+        # Signal 2: EMA50 vs EMA200 trend
+        if (desired_direction==1 and ema50>ema200) or (desired_direction==-1 and ema50<ema200):
+            score += 1
+        # Signal 3: Price vs EMA20
+        price = float(close.iloc[-1])
+        if (desired_direction==1 and price>ema20) or (desired_direction==-1 and price<ema20):
+            score += 1
+        # Signal 4: Volume increasing (if available)
+        try:
+            vol = df["volume"].astype(float)
+            if len(vol)>=2 and vol.iloc[-1] > vol.iloc[-2]:
+                score += 1
+        except:
+            pass
+        return score
+    except:
+        return 0
+
+def _check_drawdown_protection(current_equity: float, peak_equity: float, max_dd_pct: float = 0.15) -> bool:
+    """Stop trading if drawdown >15% - capital preservation"""
+    try:
+        if peak_equity <= 0:
+            return True
+        dd = (peak_equity - current_equity) / peak_equity
+        return dd < max_dd_pct
+    except:
+        return True
+
 
 def _check_correlation_filter(desired_direction: int, existing_positions: dict, asset: str) -> bool:
     try:
@@ -557,10 +634,37 @@ class TradingEngine:
                     continue
 
                 # === v023 CORRELATION FILTER (Gemini) ===
-                if not _check_correlation_filter(desired_direction, {k: v for k, v in pos_map.items() if isinstance(v, dict)}, asset):
+                if CORRELATION_FILTER_ENABLED and not _check_correlation_filter(desired_direction, {k: v for k, v in pos_map.items() if isinstance(v, dict)}, asset):
                     log.info(f"Correlation filter blocked {asset} {desired_direction}")
                     self.state.push("info", f"🚫 Correlation blocked {asset} opposite to correlated asset")
                     continue
+
+                # === v024 RSI FILTER (Prevent buying overbought, selling oversold) ===
+                if RSI_FILTER_ENABLED and not _check_rsi_filter(df, desired_direction):
+                    log.info(f"RSI filter blocked {asset} {desired_direction}")
+                    self.state.push("info", f"🚫 RSI filter blocked {asset}")
+                    continue
+
+                # === v024 CONFLUENCE FILTER (Require at least 2 signals) ===
+                if CONFLUENCE_ENABLED:
+                    confluence_score = _check_confluence(df, desired_direction)
+                    if confluence_score < MIN_CONFLUENCE_SCORE:
+                        log.info(f"Confluence filter blocked {asset} score {confluence_score} < {MIN_CONFLUENCE_SCORE}")
+                        self.state.push("info", f"🚫 Confluence {confluence_score}<{MIN_CONFLUENCE_SCORE} blocked {asset}")
+                        continue
+
+                # === v024 DRAWDOWN PROTECTION (Stop if DD>15%) ===
+                if DRAWDOWN_PROTECTION_ENABLED:
+                    try:
+                        equity = float(account.get("USDT", {}).get("equity", settings.capital_usd) if isinstance(account, dict) else settings.capital_usd)
+                        peak = float(self.state.risk.get("peak_bot_equity", settings.capital_usd))
+                        if not _check_drawdown_protection(equity, peak, settings.max_drawdown_pct):
+                            log.warning(f"Drawdown protection triggered DD>{settings.max_drawdown_pct*100}% - stopping trades")
+                            self.state.push("warning", f"🛡️ Drawdown protection DD>{settings.max_drawdown_pct*100}% - trading paused")
+                            break
+                    except:
+                        pass
+
 
                 # Sizing - Fix 3 + v023 RISK MANAGED
                 # Old: 50% capital per asset -> 40% loss
