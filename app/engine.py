@@ -27,10 +27,13 @@ from app.smart_tp_sl import calculate_initial_levels, evaluate_smart_exit
 try:
     from app.strategy.zenith_apex_rebirth import zenith_apex_rebirth_signal, calculate_position_size_v025, calculate_adx
     NEW_STRATEGY_AVAILABLE = True
-except:
+    print("v025 New strategy loaded successfully")
+except Exception as e:
+    import logging
+    logging.getLogger("engine").warning(f"v025 strategy import failed: {e}")
     NEW_STRATEGY_AVAILABLE = False
     def zenith_apex_rebirth_signal(df_1h, df_4h=None):
-        return {"direction": 0, "strength": 0, "reasons": ["No new strategy"]}
+        return {"direction": 0, "strength": 0, "reasons": [f"No new strategy: {e}"]}
     def calculate_position_size_v025(entry, sl, capital, risk_pct=0.005, max_notional_pct=0.10, leverage=5):
         return 0, 0
     def calculate_adx(df, period=14):
