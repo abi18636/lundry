@@ -507,13 +507,13 @@ class TradingEngine:
             positions_task = client.positions("USDT")
             account, positions = await asyncio.gather(account_task, positions_task)
 
-            # 2. Concurrently fetch orderbook and candles for all active assets
+            # 2. Concurrently fetch orderbook and candles for all active assets - v026 need 1000h for sleeves
             tasks = []
             for asset in active_assets:
                 symbol = settings.instrument_for(asset)
                 order_sym = settings.order_symbol_for(asset) if hasattr(settings, 'order_symbol_for') else symbol
                 tasks.append(client.order_book(symbol))
-                tasks.append(client.candles(symbol, hours=100))
+                tasks.append(client.candles(symbol, hours=1000))
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
@@ -561,21 +561,39 @@ class TradingEngine:
             
             sleeve_results = {}
             blended_targets = {}
-            if 'SLEEVES_AVAILABLE' in globals() and SLEEVES_AVAILABLE and frames:
+            # v026: Try sleeves even if frames small
+            if 'SLEEVES_AVAILABLE' in globals():
                 try:
-                    enabled = ["diversified_5", "zenith_apex", "almasi_primary", "inst_v3_stable", "inst_v3_primary", "zenith_endurance", "mean_reversion"]
-                    sleeve_results = build_all_sleeves(frames, settings.capital_usd, min(settings.lev_cap, LEVERAGE_FORCED), enabled=enabled)
-                    blended_targets = blend_sleeves(sleeve_results, DEFAULT_WEIGHTS)
-                    log.info(f"v026 Sleeves: {len(sleeve_results)} built, blended {len(blended_targets)} assets")
-                    # Log each sleeve
-                    for sid, sr in sleeve_results.items():
-                        active_s = sum(1 for pa in sr.per_asset.values() if pa.get("side",0)!=0)
-                        if active_s>0:
-                            self.state.push("info", f"🧩 {sid}: {active_s} signals - {sr.notes[:100]}")
+                    if not SLEEVES_AVAILABLE:
+                        log.warning("SLEEVES_AVAILABLE False")
+                    if not frames:
+                        log.warning(f"No frames for sleeves, market_data keys {list(market_data.keys())}")
+                        for asset in active_assets:
+                            md = market_data.get(asset)
+                            if md:
+                                df = md.get("candles")
+                                log.warning(f"{asset} df empty {df.empty if hasattr(df, 'empty') else 'no df'} len {len(df) if hasattr(df, '__len__') else 0}")
+                    
+                    if SLEEVES_AVAILABLE and frames:
+                        enabled = ["diversified_5", "zenith_apex", "almasi_primary", "inst_v3_stable", "inst_v3_primary", "zenith_endurance", "mean_reversion"]
+                        sleeve_results = build_all_sleeves(frames, settings.capital_usd, min(settings.lev_cap, LEVERAGE_FORCED), enabled=enabled)
+                        blended_targets = blend_sleeves(sleeve_results, DEFAULT_WEIGHTS)
+                        log.info(f"v026 Sleeves: {len(sleeve_results)} built, blended {len(blended_targets)} assets: {blended_targets}")
+                        self.state.push("info", f"🧩 Sleeves: {len(sleeve_results)} built, blended {len(blended_targets)}")
+                        for sid, sr in sleeve_results.items():
+                            active_s = sum(1 for pa in sr.per_asset.values() if pa.get("side",0)!=0)
+                            self.state.push("info", f"🧩 {sid}: {active_s} signals - {sr.notes[:80]}")
+                            if active_s>0:
+                                log.info(f"Sleeve {sid} active {active_s}: {[(a, pa.get('side'), pa.get('detail',{}).get('reason','')[:50]) for a, pa in sr.per_asset.items() if pa.get('side',0)!=0][:3]}")
                 except Exception as e:
                     log.warning(f"v026 Sleeves failed: {e}")
                     import traceback
-                    log.warning(traceback.format_exc()[:500])
+                    tb = traceback.format_exc()
+                    log.warning(tb[:1000])
+                    self.state.push("error", f"Sleeves failed: {e} {tb[:200]}")
+            else:
+                log.warning("SLEEVES_AVAILABLE not in globals")
+
 
             # 3. Process each asset with v026 logic (sleeves + apex rebirth)
 
