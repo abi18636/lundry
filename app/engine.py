@@ -33,7 +33,7 @@ except Exception as e:
     logging.getLogger("engine").warning(f"v025 strategy import failed: {e}")
     NEW_STRATEGY_AVAILABLE = False
     def zenith_apex_rebirth_signal(df_1h, df_4h=None):
-        return {"direction": 0, "strength": 0, "reasons": [f"No new strategy: {e}"]}
+        return {"direction": 0, "strength": 0, "reasons": ["No new strategy - import failed"]}
     def calculate_position_size_v025(entry, sl, capital, risk_pct=0.005, max_notional_pct=0.10, leverage=5):
         return 0, 0
     def calculate_adx(df, period=14):
@@ -657,9 +657,9 @@ class TradingEngine:
                         log.info(f"v025 No signal {asset} reasons {signal_reasons}")
                         self.state.push("info", f"🔍 No signal {asset}: {', '.join(signal_reasons[:2])}")
                         continue
-                except Exception as e:
-                    log.warning(f"v025 signal failed {asset}: {e}")
-                    self.state.push("warning", f"⚠️ v025 signal failed {asset}: {e}")
+                except Exception as ex:
+                    log.warning(f"v025 signal failed {asset}: {ex}")
+                    self.state.push("warning", f"⚠️ v025 signal failed {asset}: {ex}")
                     continue
                 
                 if desired_direction == 0:
