@@ -135,8 +135,8 @@ def zenith_apex_rebirth_signal(df_1h: pd.DataFrame, df_4h: pd.DataFrame = None) 
         result["bb_pos"] = bb_pos
         
         # Filter 1: ADX >25 for strong trend
-        if adx < 25:
-            result["reasons"].append(f"Weak trend ADX {adx:.1f}<25")
+        if adx < 20:
+            result["reasons"].append(f"Weak trend ADX {adx:.1f}<20")
             return result
         
         # Filter 2: RSI not overbought/oversold
@@ -186,12 +186,12 @@ def zenith_apex_rebirth_signal(df_1h: pd.DataFrame, df_4h: pd.DataFrame = None) 
         if rsi > 60 and main_trend_down:
             short_signals += 1
         
-        # Decide
-        if long_signals >= 3 and long_signals > short_signals:
+        # Decide - v025: require 2 not 3 for more trades but still filtered
+        if long_signals >= 2 and long_signals > short_signals:
             result["direction"] = 1
             result["strength"] = min(1.0, long_signals / 5.0)
             result["reasons"].append(f"LONG confluence {long_signals}/5 ADX {adx:.1f} RSI {rsi:.1f} BB {bb_pos:.2f}")
-        elif short_signals >= 3 and short_signals > long_signals:
+        elif short_signals >= 2 and short_signals > long_signals:
             result["direction"] = -1
             result["strength"] = min(1.0, short_signals / 5.0)
             result["reasons"].append(f"SHORT confluence {short_signals}/5 ADX {adx:.1f} RSI {rsi:.1f} BB {bb_pos:.2f}")
