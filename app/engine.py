@@ -25,6 +25,13 @@ from app.ariax import AriaXAsyncClient, AriaXClient
 from app.execution import maker_limit_price, plan_rebalance
 from app.smart_tp_sl import calculate_initial_levels, evaluate_smart_exit
 
+# === v023 RISK MANAGEMENT FIXES (Team 10x Analysis) ===
+MAX_RISK_PER_TRADE_PCT = 0.01
+MAX_NOTIONAL_PER_ASSET_PCT = 0.20
+LEVERAGE_FORCED = 2
+TREND_FILTER_ENABLED = True
+
+
 log = logging.getLogger("engine_v019")
 
 def utcnow():
@@ -140,9 +147,58 @@ class SimpleAriaXTestTrader:
                 return self.snapshot()
 
 
+def _check_trend_filter(df, asset: str) -> int:
+    try:
+        if df.empty or len(df) < 200:
+            return 0
+        close = df["close"].astype(float)
+        ema50 = close.ewm(span=50).mean().iloc[-1]
+        ema200 = close.ewm(span=200).mean().iloc[-1]
+        ema20 = close.ewm(span=20).mean().iloc[-1]
+        if ema50 > ema200 and ema20 > ema50:
+            return 1
+        elif ema50 < ema200 and ema20 < ema50:
+            return -1
+        else:
+            return 0
+    except:
+        return 0
+
+def _check_correlation_filter(desired_direction: int, existing_positions: dict, asset: str) -> bool:
+    try:
+        for existing_asset, pos in existing_positions.items():
+            if existing_asset == asset:
+                continue
+            existing_qty = float(pos.get("size", 0))
+            if abs(existing_qty) < 1e-9:
+                continue
+            existing_dir = 1 if existing_qty > 0 else -1
+            if {existing_asset, asset} <= {"BTC", "ETH"}:
+                if existing_dir != desired_direction:
+                    return False
+        return True
+    except:
+        return True
+
+def _calculate_position_size_risk_managed(entry: float, sl: float, capital: float, max_risk_pct: float = 0.01, max_notional_pct: float = 0.20) -> float:
+    try:
+        risk_usd = capital * max_risk_pct
+        sl_distance = abs(entry - sl)
+        if sl_distance <= 0:
+            sl_distance = entry * 0.02
+        qty_by_risk = risk_usd / sl_distance
+        max_notional = capital * max_notional_pct
+        qty_by_notional = max_notional / entry
+        qty = min(qty_by_risk, qty_by_notional)
+        if qty * entry < 5.0:
+            qty = 5.0 / entry
+        return max(0.0, qty)
+    except:
+        return 0.0
+
 class TradingEngine:
     """
-    v019 STABLE - Async Trading Engine with sync wrapper for compatibility
+    v023 RISK-MANAGED - 10x Team Analysis Fix
     """
     def __init__(self, settings: Settings = None):
         self.settings = settings or get_settings()
@@ -490,14 +546,51 @@ class TradingEngine:
                 except:
                     continue
                 
-                desired_direction = 1 if ema20 > ema50 else (-1 if ema20 < ema50 else 0)
+                # === v023 TREND FILTER (Grok) ===
+                trend_dir = _check_trend_filter(df, asset)
+                if TREND_FILTER_ENABLED and trend_dir != 0:
+                    desired_direction = trend_dir
+                else:
+                    desired_direction = 1 if ema20 > ema50 else (-1 if ema20 < ema50 else 0)
                 
                 if desired_direction == 0:
                     continue
 
-                # Sizing - Fix 3
-                allocated_usd = (settings.capital_usd / len(active_assets)) * settings.lev_cap
-                desired_qty = (allocated_usd / mark_price) * desired_direction
+                # === v023 CORRELATION FILTER (Gemini) ===
+                if not _check_correlation_filter(desired_direction, {k: v for k, v in pos_map.items() if isinstance(v, dict)}, asset):
+                    log.info(f"Correlation filter blocked {asset} {desired_direction}")
+                    self.state.push("info", f"🚫 Correlation blocked {asset} opposite to correlated asset")
+                    continue
+
+                # Sizing - Fix 3 + v023 RISK MANAGED
+                # Old: 50% capital per asset -> 40% loss
+                # New: Max 20% capital, 1% risk per trade, lev 2
+                allocated_usd = (settings.capital_usd / len(active_assets)) * min(settings.lev_cap, LEVERAGE_FORCED)
+                allocated_usd = min(allocated_usd, settings.capital_usd * MAX_NOTIONAL_PER_ASSET_PCT)
+                
+                # Risk-managed qty based on 1% risk
+                temp_atr = mark_price * 0.02
+                try:
+                    if not df.empty and len(df) >= 14:
+                        high = df["high"].astype(float)
+                        low = df["low"].astype(float)
+                        tr = (high - low).abs()
+                        temp_atr = float(tr.rolling(14).mean().iloc[-1] or mark_price*0.02)
+                except:
+                    pass
+                sl_price_temp = mark_price - (1.2 * temp_atr * desired_direction)
+                desired_qty = _calculate_position_size_risk_managed(
+                    entry=mark_price,
+                    sl=sl_price_temp,
+                    capital=settings.capital_usd,
+                    max_risk_pct=MAX_RISK_PER_TRADE_PCT,
+                    max_notional_pct=MAX_NOTIONAL_PER_ASSET_PCT
+                ) * desired_direction
+                
+                # Cap by allocated
+                max_qty_alloc = allocated_usd / mark_price if mark_price>0 else 0
+                if abs(desired_qty) > max_qty_alloc and max_qty_alloc>0:
+                    desired_qty = max_qty_alloc * (1 if desired_qty>0 else -1)
 
                 # Execute Maker Rebalance - Fix 1 & 2
                 plan = plan_rebalance(
@@ -511,7 +604,15 @@ class TradingEngine:
 
                 if plan.status == "planned" and plan.amount > 0:
                     try:
-                        limit_px = maker_limit_price(book, plan.direction)
+                        # v023 FIX price required error
+                        try:
+                            limit_px = maker_limit_price(book, plan.direction)
+                            if limit_px <= 0:
+                                limit_px = mark_price * (0.999 if plan.direction=="buy" else 1.001)
+                        except:
+                            limit_px = mark_price * (0.999 if plan.direction=="buy" else 1.001)
+                        if limit_px <= 0:
+                            limit_px = mark_price
                         result = None
                         order_id = f"{asset}_{int(time.time())}"
                         status = "dry_run"

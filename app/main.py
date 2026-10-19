@@ -335,6 +335,6 @@ def api_close_alias(asset: str, authorization: Optional[str] = Header(None), x_t
 @app.post("/api/control/close/{asset}")
 def close_asset(asset: str, authorization: Optional[str] = Header(None), x_token: Optional[str] = Header(None)):
     _check_token(authorization, x_token)
-    # Trigger close via engine state
     engine.state.push("info", f"Manual close requested for {asset}")
-    return {"ok": True, "asset": asset, "msg": f"Close requested for {asset}"}
+    result = engine.close_position(asset.upper())
+    return {"ok": bool(result), "asset": asset, "msg": f"Close requested for {asset}", "result": result}
