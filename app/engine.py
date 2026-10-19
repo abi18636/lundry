@@ -24,20 +24,39 @@ from app.config import Settings, get_settings
 from app.ariax import AriaXAsyncClient, AriaXClient
 from app.execution import maker_limit_price, plan_rebalance
 from app.smart_tp_sl import calculate_initial_levels, evaluate_smart_exit
+try:
+    from app.strategy.zenith_apex_rebirth import zenith_apex_rebirth_signal, calculate_position_size_v025, calculate_adx
+    NEW_STRATEGY_AVAILABLE = True
+except:
+    NEW_STRATEGY_AVAILABLE = False
+    def zenith_apex_rebirth_signal(df_1h, df_4h=None):
+        return {"direction": 0, "strength": 0, "reasons": ["No new strategy"]}
+    def calculate_position_size_v025(entry, sl, capital, risk_pct=0.005, max_notional_pct=0.10, leverage=5):
+        return 0, 0
+    def calculate_adx(df, period=14):
+        return 0
 
-# === v024 COMPREHENSIVE FIX - 10 ASSETS LEV5 - Fix overall loss-making ===
-# Team 10x Analysis + User request: 10 assets, lev5, fix all loss-making issues
-MAX_RISK_PER_TRADE_PCT = 0.01  # 1% capital = 4$ max loss per trade - prevents 40% loss
-MAX_NOTIONAL_PER_ASSET_PCT = 0.10  # 10% capital per asset for 10 assets = 40$ max per asset (diversification)
+
+# === v025 DEEP TRANSFORMATION - Fix overall loss-making - 10 ASSETS LEV5 ===
+# Deep transformation as requested: fix all loss-making issues
+MAX_RISK_PER_TRADE_PCT = 0.005  # 0.5% capital = 2$ max loss per trade - even more conservative
+MAX_NOTIONAL_PER_ASSET_PCT = 0.10  # 10% capital per asset for 10 assets = 40$ max
 LEVERAGE_FORCED = 5  # User requested lev5
 TREND_FILTER_ENABLED = True
 CORRELATION_FILTER_ENABLED = True
 RSI_FILTER_ENABLED = True
-FUNDING_FILTER_ENABLED = False  # Placeholder for future
+ADX_FILTER_ENABLED = True
+FUNDING_FILTER_ENABLED = False
 DRAWDOWN_PROTECTION_ENABLED = True
 PROFIT_SAVER_ENABLED = True
 CONFLUENCE_ENABLED = True
-MIN_CONFLUENCE_SCORE = 1  # Require at least 2 signals
+MIN_CONFLUENCE_SCORE = 1
+NEW_STRATEGY_ENABLED = True  # Use Zenith Apex Rebirth
+DAILY_LOSS_LIMIT_PCT = 0.05  # 5% daily loss limit - stop trading
+COOLDOWN_HOURS = 4  # 4h cooldown per asset after close
+MIN_HOLD_HOURS = 1  # Hold at least 1h
+MAX_HOLD_HOURS = 24  # Max 24h hold
+
 
 # Risk management: With 10 assets * 10% = 100% capital max, but with lev5 = 500% notional max
 # But with 1% risk per trade, max loss 10% if all 10 SL hit simultaneously (within 15% DD limit)
