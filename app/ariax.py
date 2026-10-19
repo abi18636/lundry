@@ -543,10 +543,10 @@ class AriaXAsyncClient:
             "type": "Limit",
             "post_only": post_only,
             "reduce_only": reduce_only,
-            "leverage": 2
+            "leverage": 5
         }
         return await self._request("POST", "/api/order", json_body=body, is_public=False)
 
     async def close_market(self, symbol: str, side: str, qty: float) -> dict:
-        body = {"symbol": symbol, "side": side, "qty": qty, "type": "market", "reduce_only": True, "leverage": 2}
+        body = {"symbol": symbol, "side": side, "qty": qty, "type": "market", "reduce_only": True, "leverage": 5}
         return await self._request("POST", "/api/order", json_body=body, is_public=False)

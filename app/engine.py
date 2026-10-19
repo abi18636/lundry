@@ -28,7 +28,7 @@ from app.smart_tp_sl import calculate_initial_levels, evaluate_smart_exit
 # === v023 RISK MANAGEMENT FIXES (Team 10x Analysis) ===
 MAX_RISK_PER_TRADE_PCT = 0.01
 MAX_NOTIONAL_PER_ASSET_PCT = 0.20
-LEVERAGE_FORCED = 2
+LEVERAGE_FORCED = 5
 TREND_FILTER_ENABLED = True
 
 
