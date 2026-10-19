@@ -27,11 +27,11 @@ services:
       - key: CAPITAL_USD
         value: "400"
       - key: LEV_CAP
-        value: "1"
+        value: "5"
       - key: LONG_ONLY
         value: "false"
       - key: ASSETS
-        value: BTC,ETH
+        value: BTC,ETH,SOL,AVAX,LINK,XRP,DOGE,ADA,DOT,LTC
       - key: SLEEVE_WEIGHTS
         value: "diversified_5:0.15,zenith_apex:0.15,almasi_primary:0.15,inst_v3_stable:0.15,inst_v3_primary:0.10,zenith_endurance:0.10,mean_reversion:0.20"
       - key: SLEEVES_ENABLED
