@@ -611,6 +611,33 @@ class TradingEngine:
 
             # v027: Max 8 positions to avoid overexposure, hold winners
             current_positions_count = sum(1 for v in pos_map.values() if abs(float(v.get("size",0) if isinstance(v, dict) else 0))>1e-9)
+            log.info(f"Current positions {current_positions_count} pos_map keys {list(pos_map.keys())} raw positions len {len(positions)}")
+            
+            # If first loop and positions empty but we expect positions, wait
+            if self.state.loop_count == 0 and current_positions_count == 0:
+                # Check direct API one more time with detailed logging
+                try:
+                    import httpx
+                    base = settings.ariax_base_url
+                    headers = {"X-API-Key": settings.ariax_api_key, "X-API-Secret": settings.ariax_api_secret}
+                    r = httpx.get(f"{base}/api/positions", headers=headers, timeout=15)
+                    self.state.push("info", f"🔍 Direct positions check status {r.status_code} len {len(r.text)}")
+                    if r.status_code==200:
+                        data = r.json()
+                        raw = data.get("data", [])
+                        self.state.push("info", f"🔍 Direct API has {len(raw)} positions, will use next loop")
+                        # Don't open new if direct API has positions, wait for next loop to have cache
+                        if len(raw) > 0:
+                            self.state.push("info", f"⏳ Waiting next loop to avoid duplicate, direct has {len(raw)}")
+                            # Save to cache for next loop
+                            self._last_async_positions = [{"instrument_name": pp.get("symbol"), "size": float(pp.get("size") or 0), "direction": "buy" if float(pp.get("size") or 0)>0 else "sell", "average_price": float(pp.get("entry") or 0), "mark_price": float(pp.get("mark") or 0), "floating_profit_loss": float(pp.get("upnl") or 0)} for pp in raw]
+                            # Skip opening new this loop
+                            self.state.loop_count += 1
+                            self.state.save()
+                            return True
+                except Exception as e:
+                    self.state.push("error", f"Direct check failed {e}")
+            
             if current_positions_count >= 8:
                 self.state.push("info", f"📊 Max positions {current_positions_count}/8 reached, holding winners")
                 log.info(f"Max positions {current_positions_count}/8, holding")
