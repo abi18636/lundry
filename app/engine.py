@@ -553,6 +553,13 @@ class TradingEngine:
             
             self._last_async_market = market_data
             self._last_async_positions = positions if positions else getattr(self, '_last_async_positions', [])
+            
+            # Debug log positions
+            try:
+                log.info(f"v027 Positions fetched {len(positions)} pos_map {len(pos_map)} assets {list(pos_map.keys())[:5]}")
+                self.state.push("info", f"📊 Positions {len(positions)} mapped {len(pos_map)}: {list(pos_map.keys())}")
+            except:
+                pass
 
             # Daily loss limit
             try:
@@ -566,10 +573,17 @@ class TradingEngine:
             # v027: Max 8 positions to avoid overexposure, hold winners
             current_positions_count = sum(1 for v in pos_map.values() if abs(float(v.get("size",0) if isinstance(v, dict) else 0))>1e-9)
             if current_positions_count >= 8:
-                self.state.push("info", f"📊 Max positions {current_positions_count}/8 reached, holding")
+                self.state.push("info", f"📊 Max positions {current_positions_count}/8 reached, holding winners")
+                log.info(f"Max positions {current_positions_count}/8, holding")
             
             # Process each asset with v027 ULTIMATE SUCCESSFUL logic
             for asset in active_assets:
+                # Skip new opens if max reached and no position for this asset
+                if current_positions_count >= 9:
+                    curr = pos_map.get(asset, {})
+                    curr_qty = float(curr.get("size",0) if isinstance(curr, dict) else 0)
+                    if abs(curr_qty) < 1e-9:
+                        continue
                 try:
                     symbol = settings.instrument_for(asset)
                     order_sym = settings.order_symbol_for(asset) if hasattr(settings, 'order_symbol_for') else symbol
