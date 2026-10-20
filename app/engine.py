@@ -530,13 +530,29 @@ class TradingEngine:
                     market_data[asset] = {"book": {"best_bid":0,"best_ask":0,"state":"unknown"}, "candles": pd.DataFrame()}
 
             pos_map = {}
-            for p in positions:
-                raw_sym = p.get("instrument_name") or p.get("symbol") or ""
-                asset_key = settings.asset_from_symbol(raw_sym) if hasattr(settings, 'asset_from_symbol') else raw_sym.replace("USDT","").replace("USD","")
-                if asset_key:
-                    pos_map[asset_key] = p
+            try:
+                for p in positions:
+                    raw_sym = p.get("instrument_name") or p.get("symbol") or ""
+                    asset_key = settings.asset_from_symbol(raw_sym) if hasattr(settings, 'asset_from_symbol') else raw_sym.replace("USDT","").replace("USD","")
+                    if asset_key:
+                        pos_map[asset_key] = p
+            except:
+                pos_map = {}
+            
+            # Cache positions if API returns empty but we had positions before
+            if not pos_map and hasattr(self, '_last_async_positions') and self._last_async_positions:
+                try:
+                    for p in self._last_async_positions:
+                        raw_sym = p.get("instrument_name") or p.get("symbol") or ""
+                        asset_key = settings.asset_from_symbol(raw_sym) if hasattr(settings, 'asset_from_symbol') else raw_sym.replace("USDT","").replace("USD","")
+                        if asset_key and asset_key not in pos_map:
+                            pos_map[asset_key] = p
+                    log.info(f"Using cached positions {len(pos_map)}")
+                except:
+                    pass
+            
             self._last_async_market = market_data
-            self._last_async_positions = positions
+            self._last_async_positions = positions if positions else getattr(self, '_last_async_positions', [])
 
             # Daily loss limit
             try:
@@ -547,6 +563,11 @@ class TradingEngine:
             except:
                 pass
 
+            # v027: Max 8 positions to avoid overexposure, hold winners
+            current_positions_count = sum(1 for v in pos_map.values() if abs(float(v.get("size",0) if isinstance(v, dict) else 0))>1e-9)
+            if current_positions_count >= 8:
+                self.state.push("info", f"📊 Max positions {current_positions_count}/8 reached, holding")
+            
             # Process each asset with v027 ULTIMATE SUCCESSFUL logic
             for asset in active_assets:
                 try:
