@@ -504,10 +504,49 @@ class TradingEngine:
                     self.state.push("error", f"Startup cleanup failed: {e}")
                     self.startup_closed = True
 
-            # Fetch account and positions
+            # Fetch account and positions with sync fallback to avoid 0 positions bug
             account_task = client.account_summary("USDT")
             positions_task = client.positions("USDT")
             account, positions = await asyncio.gather(account_task, positions_task)
+            
+            # Fallback to sync client if async returns 0 but we had positions before
+            if (not positions or len(positions)==0) and hasattr(self, '_last_async_positions') and self._last_async_positions and len(self._last_async_positions)>0:
+                log.info(f"Async positions empty, using cached {len(self._last_async_positions)}")
+                positions = self._last_async_positions
+                self.state.push("info", f"📊 Using cached positions {len(positions)}")
+            elif (not positions or len(positions)==0):
+                # Try sync client as fallback
+                try:
+                    import httpx
+                    base = settings.ariax_base_url
+                    headers = {"X-API-Key": settings.ariax_api_key, "X-API-Secret": settings.ariax_api_secret}
+                    r = httpx.get(f"{base}/api/positions", headers=headers, timeout=10)
+                    if r.status_code==200:
+                        data = r.json()
+                        raw = data.get("data", []) if isinstance(data, dict) else []
+                        if raw:
+                            # Normalize like async does
+                            norm = []
+                            for pp in raw:
+                                try:
+                                    sz = float(pp.get("size") or 0)
+                                    if abs(sz) > 1e-8:
+                                        norm.append({
+                                            "instrument_name": pp.get("symbol") or pp.get("instrument_name"),
+                                            "size": sz,
+                                            "direction": "buy" if sz>0 else "sell",
+                                            "average_price": float(pp.get("entry") or pp.get("average_price") or 0),
+                                            "mark_price": float(pp.get("mark") or pp.get("mark_price") or 0),
+                                            "floating_profit_loss": float(pp.get("upnl") or 0)
+                                        })
+                                except:
+                                    pass
+                            if norm:
+                                positions = norm
+                                log.info(f"Sync fallback got {len(positions)} positions")
+                                self.state.push("info", f"📊 Sync fallback positions {len(positions)}")
+                except Exception as e:
+                    log.warning(f"Sync fallback failed: {e}")
 
             # Fetch market data with 1000h for successful strategies
             tasks = []
