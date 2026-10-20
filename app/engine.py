@@ -650,6 +650,19 @@ class TradingEngine:
                     curr_qty = float(curr.get("size",0) if isinstance(curr, dict) else 0)
                     if abs(curr_qty) < 1e-9:
                         continue
+                
+                # Also skip if we already have SL/TP tracked for this asset (avoid duplicate when API returns 0)
+                if asset in self.positions_state:
+                    # We have tracked position, check if API says no position but we have tracked, use tracked
+                    tracked = self.positions_state.get(asset, {})
+                    if tracked:
+                        # If pos_map says no position but we have tracked, assume we have position
+                        curr = pos_map.get(asset, {})
+                        curr_qty = float(curr.get("size",0) if isinstance(curr, dict) else 0)
+                        if abs(curr_qty) < 1e-9:
+                            # We have tracked but API says 0, likely API flaky, skip opening new
+                            log.info(f"Skipping {asset} - have tracked SL/TP but API says 0, avoiding duplicate")
+                            continue
                 try:
                     symbol = settings.instrument_for(asset)
                     order_sym = settings.order_symbol_for(asset) if hasattr(settings, 'order_symbol_for') else symbol
