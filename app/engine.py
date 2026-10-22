@@ -348,10 +348,31 @@ class TradingEngine:
             positions_task = client.positions("USDT")
             account, positions = await asyncio.gather(account_task, positions_task)
             
-            if (not positions or len(positions)==0) and hasattr(self, '_last_async_positions') and self._last_async_positions:
-                positions = self._last_async_positions
+            # Check direct API to see if positions truly 0 or just async flaky
+            direct_positions_count = -1
+            try:
+                import httpx
+                base = settings.ariax_base_url
+                headers = {"X-API-Key": settings.ariax_api_key, "X-API-Secret": settings.ariax_api_secret}
+                r = httpx.get(f"{base}/api/positions", headers=headers, timeout=10)
+                if r.status_code==200:
+                    data = r.json()
+                    raw = data.get("data", [])
+                    direct_positions_count = len(raw)
+                    # If direct says 0, clear cache and allow new opens
+                    if direct_positions_count == 0:
+                        self._last_async_positions = []
+                        positions = []
+                        log.info("Direct API says 0 positions, cleared cache for fresh start")
+                        self.state.push("info", "📊 Direct API 0 positions, fresh start")
+            except Exception as e:
+                log.warning(f"Direct check failed: {e}")
             
-            if (not positions or len(positions)==0):
+            if (not positions or len(positions)==0) and hasattr(self, '_last_async_positions') and self._last_async_positions and direct_positions_count != 0:
+                positions = self._last_async_positions
+                log.info(f"Using cached {len(positions)} positions, direct count {direct_positions_count}")
+            
+            if (not positions or len(positions)==0) and direct_positions_count != 0:
                 try:
                     import httpx
                     base = settings.ariax_base_url
