@@ -402,6 +402,20 @@ class TradingEngine:
                     if df.empty or len(df)<400:
                         continue
 
+                    # Optional research-only shadow forecast; never influences orders.
+                    # Disabled by default and independent of the hard entry lock.
+                    import os
+                    if os.getenv("KRONOS_SHADOW_ENABLED", "false").lower() == "true" and asset == "BTC":
+                        try:
+                            candle_key = str(df["dt"].iloc[-1])
+                            if getattr(self, "_kronos_candle", None) != candle_key:
+                                self._kronos_candle = candle_key
+                                from app.kronos_runtime import research_forecast
+                                forecast = await research_forecast(asset, df, pd.Timestamp.now(tz="UTC"))
+                                self.state.push("info", f"Kronos SHADOW {asset} forecast {forecast.predicted_return:+.3%}; no trading action")
+                        except Exception as exc:
+                            self.state.push("warning", f"Kronos SHADOW unavailable: {type(exc).__name__}; no trading action")
+
                     current_pos = pos_map.get(asset, {})
                     current_qty = float(current_pos.get("size", 0.0) if isinstance(current_pos, dict) else 0)
                     
