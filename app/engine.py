@@ -468,6 +468,12 @@ class TradingEngine:
                         self.state.push("info", f"🔍 No signal {asset}: {sig.get('reason','')[:80]}")
                         continue
 
+                    # Fail closed: do not send new orders until reconciliation,
+                    # exit handling and risk controls have passed integration tests.
+                    # Existing positions still go through exit monitoring above.
+                    self.state.push("warning", f"ENTRY LOCKED: {asset}; safety verification pending")
+                    continue
+
                     try:
                         atr_v = _atr(df["high"].astype(float) if "high" in df.columns else df["close"].astype(float), df["low"].astype(float) if "low" in df.columns else df["close"].astype(float), df["close"].astype(float), 14)
                         sl_dist = 1.0 * atr_v

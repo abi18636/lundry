@@ -141,7 +141,9 @@ def health():
         "n_assets": len(settings.effective_assets),
         "assets": settings.effective_assets,
         "assets_count": len(settings.effective_assets),
-        "trading_ready": (bool(settings.ariax_api_key) and bool(settings.ariax_api_secret) and settings.trading_enabled and not settings.effective_dry_run and engine.state.last_loop_at is not None),
+        "trading_ready": False,  # New entries locked pending safety verification.
+        "entry_safety_lock": True,
+        "safety_note": "New entries disabled; existing position exit protection is not independently verified.",
             "dry_run": settings.effective_dry_run,
             "trading_enabled": settings.trading_enabled,
         "capital_usd": settings.capital_usd,
