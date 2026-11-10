@@ -204,23 +204,23 @@ def _apex_signal_profitable(df: pd.DataFrame) -> dict:
         return res
 
 def _position_size(entry: float, sl: float, capital: float, risk_pct=0.005, max_notional_pct=0.10, lev=5) -> float:
+    """Conservative sizing; minimum order never overrides the risk budget."""
     try:
-        risk_usd = capital * risk_pct
-        sl_dist = abs(entry - sl)
-        if sl_dist <= 0:
-            sl_dist = entry * 0.01
-        qty_risk = risk_usd / sl_dist
-        max_notional = capital * max_notional_pct
-        qty_notional = max_notional / entry
-        qty = min(qty_risk, qty_notional)
+        vals = [float(entry), float(sl), float(capital), float(risk_pct), float(max_notional_pct), float(lev)]
+        if not all(math.isfinite(v) and v > 0 for v in vals):
+            return 0.0
+        entry, sl, capital, risk_pct, max_notional_pct, lev = vals
+        distance = abs(entry - sl)
+        if distance <= 0:
+            return 0.0
+        qty = min(capital * risk_pct / distance, capital * max_notional_pct / entry)
+        # Minimum notional is only an estimated venue requirement; reject instead
+        # of artificially increasing exposure and breaking the risk budget.
         if qty * entry < 10:
-            qty = 10 / entry
-        max_lev = capital * max_notional_pct * lev
-        if qty * entry > max_lev:
-            qty = max_lev / entry
-        return max(0, qty)
-    except:
-        return 0
+            return 0.0
+        return qty
+    except (TypeError, ValueError, OverflowError, ZeroDivisionError):
+        return 0.0
 
 class TradingEngine:
     def __init__(self, settings=None):
@@ -337,25 +337,15 @@ class TradingEngine:
             positions_task = client.positions("USDT")
             account, positions = await asyncio.gather(account_task, positions_task)
             
-            # Direct check for fresh start
-            direct_count = -1
-            try:
-                import httpx
-                base = settings.ariax_base_url
-                headers = {"X-API-Key": settings.ariax_api_key, "X-API-Secret": settings.ariax_api_secret}
-                r = httpx.get(f"{base}/api/positions", headers=headers, timeout=10)
-                if r.status_code==200:
-                    data = r.json()
-                    raw = data.get("data", [])
-                    direct_count = len(raw)
-                    if direct_count == 0:
-                        self._last_async_positions = []
-                        positions = []
-            except:
-                pass
-            
-            if (not positions or len(positions)==0) and hasattr(self, '_last_async_positions') and self._last_async_positions and direct_count != 0:
-                positions = self._last_async_positions
+            # The direct venue snapshot is authoritative. An unavailable or
+            # malformed response is UNKNOWN, never a flat account.
+            from app.position_snapshot import normalize_positions
+            import httpx
+            base = settings.ariax_base_url
+            headers = {"X-API-Key": settings.ariax_api_key, "X-API-Secret": settings.ariax_api_secret}
+            response = await asyncio.to_thread(httpx.get, f"{base}/api/positions", headers=headers, timeout=10)
+            response.raise_for_status()
+            positions = normalize_positions(response.json())
 
             tasks = []
             for asset in active_assets:
